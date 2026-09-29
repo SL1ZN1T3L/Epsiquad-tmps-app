@@ -32,6 +32,15 @@ extensions.configure<ApplicationExtension> {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
+    
+    applicationVariants.all {
+    val variant = this
+    variant.outputs
+        .map { it as com.android.build.gradle.internal.api.BaseVariantOutputImpl }
+        .forEach { output ->
+            output.versionCodeOverride = flutter.versionCode
+        }
+    }
 
     signingConfigs {
         if (keystorePropertiesFile.exists()) {
