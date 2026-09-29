@@ -8,6 +8,7 @@ import '../models/session.dart';
 import '../providers/app_provider.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import '../widgets/update_dialog.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -190,10 +191,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ListTile(
                     leading: const TmpsIcon(Ico.download, color: TmpsColors.accent),
                     title: Text('Доступна версия ${app.update!.version}'),
-                    subtitle: const Text('Открыть страницу релиза',
+                    subtitle: const Text('Скачать и установить',
                         style: TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
-                    onTap: () => launchUrl(Uri.parse(app.update!.pageUrl),
-                        mode: LaunchMode.externalApplication),
+                    onTap: () => showDialog<void>(
+                      context: context,
+                      barrierDismissible: false,
+                      builder: (_) => UpdateDialog(app: app, release: app.update!),
+                    ),
                   )
                 else
                   ListTile(
