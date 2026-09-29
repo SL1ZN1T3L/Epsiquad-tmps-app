@@ -70,31 +70,22 @@ jobs:
         run: |
           BASE="https://github.com/$REPO/releases/download/$TAG"
           B="https://img.shields.io/badge"
+          S="logo=android&logoColor=3DDC84&labelColor=2b3038"
           {
             echo "## Скачать"
             echo
             echo "| Устройство | Файл |"
             echo "| --- | --- |"
-            echo "| Большинство телефонов с 2016 года | [![arm64-v8a]($B/APK-arm64--v8a-3ddc84?style=for-the-badge&logo=android&logoColor=white)]($BASE/app-arm64-v8a-release.apk) |"
-            echo "| Старые и бюджетные, 32 бита | [![armeabi-v7a]($B/APK-armeabi--v7a-5a8cff?style=for-the-badge&logo=android&logoColor=white)]($BASE/app-armeabi-v7a-release.apk) |"
-            echo "| Эмуляторы и планшеты на Intel | [![x86_64]($B/APK-x86__64-7c6cff?style=for-the-badge&logo=android&logoColor=white)]($BASE/app-x86_64-release.apk) |"
-            echo "| Не знаете какой - берите этот | [![universal]($B/APK-universal-22d3ee?style=for-the-badge&logo=android&logoColor=white)]($BASE/app-release.apk) |"
+            echo "| Большинство телефонов с 2016 года | [![arm64-v8a]($B/APK-arm64--v8a-40916c?$S)]($BASE/app-arm64-v8a-release.apk) |"
+            echo "| Старые и бюджетные, 32 бита | [![armeabi-v7a]($B/APK-armeabi--v7a-40916c?$S)]($BASE/app-armeabi-v7a-release.apk) |"
+            echo "| Эмуляторы и планшеты на Intel | [![x86_64]($B/APK-x86__64-40916c?$S)]($BASE/app-x86_64-release.apk) |"
+            echo "| Не знаете какой - берите этот | [![universal]($B/APK-universal-40916c?$S)]($BASE/app-release.apk) |"
             echo
             echo "Универсальный весит больше, потому что содержит код под все архитектуры сразу. Работает везде."
             echo
             echo "### При установке Android покажет предупреждение"
             echo
             echo "Приложение распространяется не через Google Play, поэтому система предупредит об установке из неизвестного источника, а Play Защита сообщит, что не проверяла это приложение. Это ожидаемо. Нажмите «Подробнее», затем «Всё равно установить»."
-            echo
-            echo "### Проверка файла"
-            echo
-            echo "Рядом с каждым APK лежит файл \`.sha256\`."
-            echo
-            echo '```bash'
-            echo "sha256sum -c app-release.apk.sha256"
-            echo '```'
-            echo
-            echo "Отпечаток сертификата подписи: \`3a5cfe6a5f48f89755b917fc11c8e02e617be6a8fdaf459303c66ef06d608bc9\`"
           } > notes.md
           cat notes.md
 
