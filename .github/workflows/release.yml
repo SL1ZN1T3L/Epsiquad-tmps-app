@@ -34,9 +34,9 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/tmps-upload.p12
           cat > android/key.properties <<EOF
-          storeFile=upload-keystore.jks
+          storeFile=tmps-upload.p12
           storePassword=$KEYSTORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
@@ -63,9 +63,44 @@ jobs:
           done
           ls -la
 
+      - name: Текст релиза
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          BASE="https://github.com/$REPO/releases/download/$TAG"
+          B="https://img.shields.io/badge"
+          {
+            echo "## Скачать"
+            echo
+            echo "| Устройство | Файл |"
+            echo "| --- | --- |"
+            echo "| Большинство телефонов с 2016 года | [![arm64-v8a]($B/APK-arm64--v8a-3ddc84?style=for-the-badge&logo=android&logoColor=white)]($BASE/app-arm64-v8a-release.apk) |"
+            echo "| Старые и бюджетные, 32 бита | [![armeabi-v7a]($B/APK-armeabi--v7a-5a8cff?style=for-the-badge&logo=android&logoColor=white)]($BASE/app-armeabi-v7a-release.apk) |"
+            echo "| Эмуляторы и планшеты на Intel | [![x86_64]($B/APK-x86__64-7c6cff?style=for-the-badge&logo=android&logoColor=white)]($BASE/app-x86_64-release.apk) |"
+            echo "| Не знаете какой - берите этот | [![universal]($B/APK-universal-22d3ee?style=for-the-badge&logo=android&logoColor=white)]($BASE/app-release.apk) |"
+            echo
+            echo "Универсальный весит больше, потому что содержит код под все архитектуры сразу. Работает везде."
+            echo
+            echo "### При установке Android покажет предупреждение"
+            echo
+            echo "Приложение распространяется не через Google Play, поэтому система предупредит об установке из неизвестного источника, а Play Защита сообщит, что не проверяла это приложение. Это ожидаемо. Нажмите «Подробнее», затем «Всё равно установить»."
+            echo
+            echo "### Проверка файла"
+            echo
+            echo "Рядом с каждым APK лежит файл \`.sha256\`."
+            echo
+            echo '```bash'
+            echo "sha256sum -c app-release.apk.sha256"
+            echo '```'
+            echo
+            echo "Отпечаток сертификата подписи: \`3a5cfe6a5f48f89755b917fc11c8e02e617be6a8fdaf459303c66ef06d608bc9\`"
+          } > notes.md
+          cat notes.md
+
       - name: Убрать секреты
         if: always()
-        run: rm -f android/app/upload-keystore.jks android/key.properties
+        run: rm -f android/app/tmps-upload.p12 android/key.properties
 
       - uses: actions/upload-artifact@v4
         with:
@@ -78,6 +113,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: notes.md
           files: |
             build/app/outputs/flutter-apk/*.apk
             build/app/outputs/flutter-apk/*.sha256

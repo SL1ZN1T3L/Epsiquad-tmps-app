@@ -36,6 +36,7 @@ class AppProvider extends ChangeNotifier {
   ServerConfig? _config;
   String _deviceId = '';
   String _deviceName = 'Android';
+  List<String> _abis = const [];
   String _appVersion = '1.0.0';
   bool _biometricEnabled = false;
   bool _biometricAvailable = false;
@@ -50,6 +51,8 @@ class AppProvider extends ChangeNotifier {
   bool get biometricAvailable => _biometricAvailable;
   String get appVersion => _appVersion;
   String get deviceName => _deviceName;
+  List<String> get abis => _abis;
+  UpdateService get updates => _updates;
   String? get notice => _notice;
   bool get unlockFailed => _unlockFailed;
   ReleaseInfo? get update => _update;
@@ -172,6 +175,7 @@ class AppProvider extends ChangeNotifier {
       final brand = android.brand.trim();
       final label = [brand, model].where((p) => p.isNotEmpty).join(' ');
       if (label.isNotEmpty) _deviceName = label;
+      _abis = android.supportedAbis;
     } catch (_) {
       _deviceName = 'Android';
     }
