@@ -20,7 +20,7 @@
     </queries>
 
     <application
-        android:label="tmps"
+        android:label="Temp Storage"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="false">

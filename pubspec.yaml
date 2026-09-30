@@ -1,7 +1,7 @@
 name: tmps
 description: Временные файловые хранилища Epsiquad - клиент для Android
 publish_to: "none"
-version: 1.4.1+20260929
+version: 1.5.0+20260930
 
 environment:
   sdk: ^3.6.0
@@ -25,6 +25,7 @@ dependencies:
   share_plus: ^13.3.0
   intl: ^0.20.3
   crypto: ^3.0.6
+  cryptography: ^2.9.0
   path_provider: ^2.1.5
   open_filex: ^4.7.0
 

@@ -4,7 +4,7 @@ import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 
 import 'providers/app_provider.dart';
-import 'screens/lock_screen.dart';
+import 'screens/pin_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/storages_screen.dart';
@@ -30,7 +30,7 @@ class TmpsApp extends StatelessWidget {
     return ChangeNotifierProvider(
       create: (_) => AppProvider()..bootstrap(),
       child: MaterialApp(
-        title: 'tmps',
+        title: 'Temp Storage',
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         home: const _Root(),
@@ -49,7 +49,9 @@ class _Root extends StatelessWidget {
       case AppStage.loading:
         return const SplashScreen();
       case AppStage.locked:
-        return const LockScreen();
+        return const PinScreen(mode: PinMode.unlock);
+      case AppStage.pinSetup:
+        return const PinScreen(mode: PinMode.create);
       case AppStage.signedOut:
         return const LoginScreen();
       case AppStage.ready:

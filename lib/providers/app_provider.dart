@@ -12,7 +12,7 @@ import '../services/secure_store.dart';
 import '../services/storage_service.dart';
 import '../services/update_service.dart';
 
-enum AppStage { loading, locked, signedOut, ready }
+enum AppStage { loading, locked, pinSetup, signedOut, ready }
 
 class AppProvider extends ChangeNotifier {
   AppProvider({SecureStore? store, UpdateService? updates})
@@ -42,7 +42,6 @@ class AppProvider extends ChangeNotifier {
   bool _biometricAvailable = false;
   String? _notice;
   ReleaseInfo? _update;
-  bool _unlockFailed = false;
 
   AppStage get stage => _stage;
   AppUser? get user => _user;
@@ -54,7 +53,6 @@ class AppProvider extends ChangeNotifier {
   List<String> get abis => _abis;
   UpdateService get updates => _updates;
   String? get notice => _notice;
-  bool get unlockFailed => _unlockFailed;
   ReleaseInfo? get update => _update;
   bool get signedIn => _tokens != null && _user != null;
 
@@ -84,38 +82,80 @@ class AppProvider extends ChangeNotifier {
       _notice = 'Не удалось получить настройки сервера. Показаны сохранённые данные';
     }
 
-    final refresh = await _store.readRefreshToken();
-    if (refresh == null || refresh.isEmpty) {
-      _stage = AppStage.signedOut;
-      notifyListeners();
-      return;
-    }
-
-    if (_biometricEnabled && _biometricAvailable) {
-      _stage = AppStage.locked;
-      notifyListeners();
-      return;
-    }
-    await _restore(refresh);
+    _stage = await _store.hasPin() ? AppStage.locked : AppStage.signedOut;
+    notifyListeners();
   }
 
-  Future<void> unlock() async {
-    _unlockFailed = false;
-    if (!await _store.unlock()) {
-      _unlockFailed = true;
-      _notice = 'Не удалось подтвердить личность';
-      notifyListeners();
-      return;
+  Future<String?> unlockWithPin(String pin) async {
+    try {
+      if (!await _store.openWithPin(pin)) {
+        final left = SecureStore.maxAttempts - await _store.failedAttempts();
+        return left <= 3 ? 'Неверный пин-код, осталось попыток: $left' : 'Неверный пин-код';
+      }
+    } on PinLocked {
+      _afterWipe();
+      return 'Слишком много попыток. Данные входа стёрты, войдите заново';
     }
+    await _afterUnlock();
+    return null;
+  }
+
+  Future<String?> unlockWithBiometrics() async {
+    try {
+      if (!await _store.openWithBiometrics()) return null;
+    } on PinLocked {
+      _afterWipe();
+      return 'Слишком много попыток. Данные входа стёрты, войдите заново';
+    }
+    await _afterUnlock();
+    return null;
+  }
+
+  Future<void> _afterUnlock() async {
     final refresh = await _store.readRefreshToken();
     if (refresh == null || refresh.isEmpty) {
+      await _store.wipe();
+      _biometricEnabled = false;
       _stage = AppStage.signedOut;
+      _notice = 'Нужно войти заново';
       notifyListeners();
       return;
     }
     _stage = AppStage.loading;
     notifyListeners();
     await _restore(refresh);
+  }
+
+  void _afterWipe() {
+    _biometricEnabled = false;
+    _tokens = null;
+    _user = null;
+    _stage = AppStage.signedOut;
+    notifyListeners();
+  }
+
+  Future<String?> definePin(String pin) async {
+    final tokens = _tokens;
+    if (tokens == null) return 'Сессия потерялась, войдите заново';
+    await _store.setPin(pin, refreshToken: tokens.refreshToken);
+    _stage = AppStage.ready;
+    notifyListeners();
+    unawaited(_syncProfile());
+    unawaited(checkForUpdate());
+    return null;
+  }
+
+  Future<String?> changePin(String current, String next) async {
+    try {
+      if (!await _store.openWithPin(current)) return 'Текущий пин-код не подошёл';
+    } on PinLocked {
+      _afterWipe();
+      return 'Слишком много попыток. Данные входа стёрты, войдите заново';
+    }
+    final refresh = await _store.readRefreshToken();
+    if (refresh == null) return 'Не удалось прочитать данные входа';
+    await _store.setPin(next, refreshToken: refresh);
+    return null;
   }
 
   Future<void> _restore(String refresh) async {
@@ -134,8 +174,7 @@ class AppProvider extends ChangeNotifier {
         _stage = AppStage.signedOut;
         _notice = 'Нужно войти заново';
       } else {
-        _unlockFailed = true;
-        _notice = e.message;
+            _notice = e.message;
         _stage = (_biometricEnabled && _biometricAvailable)
             ? AppStage.locked
             : AppStage.signedOut;
@@ -193,11 +232,16 @@ class AppProvider extends ChangeNotifier {
   Future<void> signIn(LoginResult result) async {
     _tokens = result.tokens;
     _user = result.user;
-    await _store.writeRefreshToken(result.tokens.refreshToken);
-    _stage = AppStage.ready;
+    if (_store.unlocked) {
+      await _store.writeRefreshToken(result.tokens.refreshToken);
+      _stage = AppStage.ready;
+      notifyListeners();
+      unawaited(_syncProfile());
+      unawaited(checkForUpdate());
+      return;
+    }
+    _stage = AppStage.pinSetup;
     notifyListeners();
-    unawaited(_syncProfile());
-    unawaited(checkForUpdate());
   }
 
   Future<void> _syncProfile() async {
@@ -238,7 +282,8 @@ class AppProvider extends ChangeNotifier {
     try {
       if (_tokens != null) await auth.logout();
     } catch (_) {}
-    await _store.clearRefreshToken();
+    await _store.wipe();
+    _biometricEnabled = false;
     _tokens = null;
     _user = null;
     _update = null;
@@ -246,12 +291,24 @@ class AppProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setBiometric(bool value) async {
-    if (value && !_biometricAvailable) return;
-    if (value && !await _store.unlock(reason: 'Включить вход по биометрии')) return;
+  Future<String?> setBiometric(bool value, {String? pin}) async {
+    if (value) {
+      if (!_biometricAvailable) return 'Биометрия на этом телефоне недоступна';
+      if (pin == null) return 'Нужен пин-код';
+      try {
+        if (!await _store.openWithPin(pin)) return 'Пин-код не подошёл';
+      } on PinLocked {
+        _afterWipe();
+        return 'Слишком много попыток. Данные входа стёрты, войдите заново';
+      }
+      if (!await _store.authenticate(reason: 'Включить вход по отпечатку')) {
+        return 'Не удалось подтвердить личность';
+      }
+    }
     _biometricEnabled = value;
-    await _store.setBiometricEnabled(value);
+    await _store.setBiometricEnabled(value, pin: pin);
     notifyListeners();
+    return null;
   }
 
   Future<List<DeviceEntry>> devices() => auth.devices();
