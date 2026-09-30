@@ -8,7 +8,39 @@ import '../models/session.dart';
 import '../providers/app_provider.dart';
 import '../services/api_client.dart';
 import '../theme.dart';
+import 'pin_screen.dart';
 import '../widgets/update_dialog.dart';
+
+Future<void> _changePin(BuildContext context, AppProvider app) async {
+  final current = await askPin(context, 'Текущий пин-код');
+  if (current == null || !context.mounted) return;
+  final next = await askPin(context, 'Новый пин-код');
+  if (next == null || !context.mounted) return;
+  final again = await askPin(context, 'Повторите новый пин-код');
+  if (again == null || !context.mounted) return;
+  if (next != again) {
+    _say(context, 'Пин-коды не совпали');
+    return;
+  }
+  final error = await app.changePin(current, next);
+  if (!context.mounted) return;
+  _say(context, error ?? 'Пин-код изменён');
+}
+
+Future<void> _toggleBiometric(BuildContext context, AppProvider app, bool value) async {
+  String? pin;
+  if (value) {
+    pin = await askPin(context, 'Подтвердите пин-кодом');
+    if (pin == null || !context.mounted) return;
+  }
+  final error = await app.setBiometric(value, pin: pin);
+  if (!context.mounted || error == null) return;
+  _say(context, error);
+}
+
+void _say(BuildContext context, String message) {
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -150,14 +182,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             child: Column(
               children: [
+                ListTile(
+                  leading: const TmpsIcon(Ico.lock, color: TmpsColors.muted),
+                  title: const Text('Изменить пин-код'),
+                  subtitle: const Text('Основной способ входа',
+                      style: TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
+                  onTap: () => _changePin(context, app),
+                ),
                 SwitchListTile(
                   value: app.biometricEnabled,
-                  onChanged: app.biometricAvailable ? (value) => app.setBiometric(value) : null,
+                  onChanged: app.biometricAvailable
+                      ? (value) => _toggleBiometric(context, app, value)
+                      : null,
                   activeThumbColor: TmpsColors.accent,
-                  title: const Text('Вход по биометрии'),
+                  title: const Text('Вход по отпечатку'),
                   subtitle: Text(
                     app.biometricAvailable
-                        ? 'Отпечаток или лицо при открытии приложения'
+                        ? 'Быстрее пин-кода. Пин-код продолжит работать всегда'
                         : 'На этом устройстве биометрия недоступна',
                     style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
                   ),
