@@ -1,4 +1,4 @@
-# tmps
+# Temp Storage app
 
 [![Release](https://img.shields.io/github/v/release/SL1ZN1T3L/Epsiquad-tmps-app?style=flat-square)](https://github.com/SL1ZN1T3L/Epsiquad-tmps-app/releases)
 [![Downloads](https://img.shields.io/github/downloads/SL1ZN1T3L/Epsiquad-tmps-app/total?style=flat-square)](https://github.com/SL1ZN1T3L/Epsiquad-tmps-app/releases)
@@ -83,21 +83,6 @@ flutter build apk --release --split-per-abi
 flutter build apk --release
 ```
 
-### Подпись релиза
-
-Подпись берётся из `android/key.properties`, файл в репозиторий не попадает:
-
-```properties
-storeFile=upload-keystore.jks
-storePassword=...
-keyAlias=upload
-keyPassword=...
-```
-
-Если файла нет, релизная сборка подписывается отладочным ключом - так собирается локально, но раздавать такой APK нельзя.
-
-Сборка в CI берёт ключ из секретов репозитория: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS`, `KEY_PASSWORD`. Релиз публикуется при пуше тега вида `v1.0.0`.
-
 ### Структура
 
 ```
@@ -121,15 +106,6 @@ lib/
 └── widgets/                  карточки, панель загрузки, строки файлов
 ```
 
-### Как устроен доступ
-
-Приложение не хранит никаких общих секретов - в открытом репозитории их просто нет. После входа сервер выдаёт пару токенов: короткий access на 15 минут и refresh на 90 дней. Refresh лежит в Keystore, ротируется при каждом обновлении, и если старый токен попробуют использовать повторно, сервер отзовёт устройство целиком.
-
-Файлы загружаются и скачиваются не через основной API, а прямо в контейнер хранилища. Ключ на конкретное хранилище выдаёт `POST /api/v1/storages/{code}/token`, живёт он сутки и уходит в заголовке `X-Tmps-Owner` - в том числе при скачивании, поэтому в ссылках и в истории браузера он не оседает.
-
-Тарифы, лимиты и размер части файла приложение не хардкодит - всё приходит из `GET /api/v1/config` после входа. Поэтому изменения на сервере не требуют обновления приложения.
-
-Полная спецификация API: `https://tmps.epsiquad.com/api/v1/openapi.json`.
 
 История изменений: [CHANGELOG.md](CHANGELOG.md)
 
