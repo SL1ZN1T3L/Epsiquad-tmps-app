@@ -16,3 +16,11 @@ android/local.properties
 .vscode/
 .DS_Store
 SETUP.md
+
+# Ключи подписи и цепочки ротации - никогда не коммитить
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.lineage
+key.properties

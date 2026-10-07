@@ -110,27 +110,6 @@ class _StorageView extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
-        actions: [
-          PopupMenuButton<String>(
-            icon: const TmpsIcon(Ico.more),
-            color: TmpsColors.bg2,
-            onSelected: (value) => _onMenu(context, provider, value),
-            itemBuilder: (_) => [
-              const PopupMenuItem(value: 'rename', child: Text('Переименовать')),
-              if (provider.files.isNotEmpty)
-                const PopupMenuItem(value: 'zip', child: Text('Скачать всё архивом')),
-              if (item.canExtend) const PopupMenuItem(value: 'extend', child: Text('Продлить')),
-              if (item.planOptions.isNotEmpty)
-                const PopupMenuItem(value: 'plan', child: Text('Сменить тариф')),
-              const PopupMenuItem(value: 'access', child: Text('Доступ')),
-              const PopupMenuItem(value: 'rotate', child: Text('Сменить ссылку')),
-              const PopupMenuItem(
-                value: 'delete',
-                child: Text('Удалить хранилище', style: TextStyle(color: TmpsColors.danger)),
-              ),
-            ],
-          ),
-        ],
       ),
       floatingActionButton: canWrite
           ? FloatingActionButton.extended(
@@ -149,6 +128,8 @@ class _StorageView extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
           children: [
             _header(context, provider),
+            const SizedBox(height: 12),
+            _actions(context, provider),
             const SizedBox(height: 12),
             UploadPanel(provider: provider),
             if (provider.uploads.isNotEmpty) const SizedBox(height: 12),
@@ -313,6 +294,64 @@ class _StorageView extends StatelessWidget {
     );
   }
 
+  Widget _actions(BuildContext context, StorageProvider provider) {
+    final item = provider.item;
+    final buttons = <_ActionButton>[
+      _ActionButton(
+        icon: Ico.edit,
+        label: 'Название',
+        onTap: () => _onMenu(context, provider, 'rename'),
+      ),
+      if (provider.files.isNotEmpty)
+        _ActionButton(
+          icon: Ico.archive,
+          label: 'Архивом',
+          onTap: () => _onMenu(context, provider, 'zip'),
+        ),
+      if (item.canExtend)
+        _ActionButton(
+          icon: Ico.clock,
+          label: 'Продлить',
+          onTap: () => _onMenu(context, provider, 'extend'),
+        ),
+      if (item.planOptions.isNotEmpty)
+        _ActionButton(
+          icon: Ico.plan,
+          label: 'Тариф',
+          onTap: () => _onMenu(context, provider, 'plan'),
+        ),
+      _ActionButton(
+        icon: Ico.lock,
+        label: 'Доступ',
+        onTap: () => _onMenu(context, provider, 'access'),
+      ),
+      _ActionButton(
+        icon: Ico.link,
+        label: 'Новая ссылка',
+        onTap: () => _onMenu(context, provider, 'rotate'),
+      ),
+      _ActionButton(
+        icon: Ico.trash,
+        label: 'Удалить',
+        danger: true,
+        onTap: () => _onMenu(context, provider, 'delete'),
+      ),
+    ];
+
+    return LayoutBuilder(
+      builder: (context, box) {
+        const columns = 3;
+        const gap = 8.0;
+        final width = (box.maxWidth - gap * (columns - 1)) / columns;
+        return Wrap(
+          spacing: gap,
+          runSpacing: gap,
+          children: [for (final b in buttons) SizedBox(width: width, child: b)],
+        );
+      },
+    );
+  }
+
   Widget _filesHeader(StorageProvider provider) {
     final count = provider.files.length;
     return Row(
@@ -435,6 +474,54 @@ class _StorageView extends StatelessWidget {
         }
         break;
     }
+  }
+}
+
+class _ActionButton extends StatelessWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.danger = false,
+  });
+
+  final String icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = danger ? TmpsColors.danger : TmpsColors.text;
+    return Material(
+      color: TmpsColors.surface,
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          height: 68,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: danger ? const Color(0x4DFB4B6B) : TmpsColors.border),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              TmpsIcon(icon, size: 21, color: danger ? TmpsColors.danger : TmpsColors.accent),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: color),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 
