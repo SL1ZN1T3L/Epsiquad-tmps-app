@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Тексты кнопок и канала уведомлений background_downloader -->
+    <string name="bg_downloader_cancel">Отменить</string>
+    <string name="bg_downloader_pause">Пауза</string>
+    <string name="bg_downloader_resume">Продолжить</string>
+    <string name="bg_downloader_notification_channel_name">Загрузки</string>
+    <string name="bg_downloader_notification_channel_description">Ход скачивания и загрузки файлов</string>
+</resources>

@@ -59,6 +59,8 @@ class NodeService {
       return await action();
     } on ApiException {
       rethrow;
+    } on http.RequestAbortedException {
+      rethrow;
     } on TimeoutException {
       throw ApiException('Хранилище не ответило вовремя');
     } catch (_) {
@@ -109,15 +111,18 @@ class NodeService {
     int index,
     List<int> bytes, {
     Duration timeout = const Duration(minutes: 3),
+    Future<void>? abort,
   }) {
     return _guard(() async {
-      final response = await _client
-          .put(
-            _uri(code, '/api/upload/$uid/$index'),
-            headers: _headers(grant, contentType: 'application/octet-stream'),
-            body: bytes,
-          )
-          .timeout(timeout);
+      final request = http.AbortableRequest(
+        'PUT',
+        _uri(code, '/api/upload/$uid/$index'),
+        abortTrigger: abort,
+      )
+        ..headers.addAll(_headers(grant, contentType: 'application/octet-stream'))
+        ..bodyBytes = bytes;
+      final streamed = await _client.send(request).timeout(timeout);
+      final response = await http.Response.fromStream(streamed).timeout(timeout);
       _decode(response);
     });
   }

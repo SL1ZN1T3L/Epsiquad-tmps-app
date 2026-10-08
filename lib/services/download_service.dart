@@ -9,8 +9,41 @@ class DownloadFailure implements Exception {
   String toString() => message;
 }
 
+class DownloadCanceled implements Exception {
+  const DownloadCanceled();
+}
+
+/// Ссылка на запущенное скачивание, нужна для паузы, продолжения и отмены.
+class DownloadHandle {
+  DownloadHandle._(this._task);
+
+  final DownloadTask _task;
+}
+
 class DownloadService {
   static bool _configured = false;
+
+  Future<bool> pause(DownloadHandle handle) async {
+    try {
+      return await FileDownloader().pause(handle._task);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> resume(DownloadHandle handle) async {
+    try {
+      return await FileDownloader().resume(handle._task);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> cancel(DownloadHandle handle) async {
+    try {
+      await FileDownloader().cancelTaskWithId(handle._task.taskId);
+    } catch (_) {}
+  }
 
   void _configure() {
     if (_configured) return;
@@ -38,6 +71,9 @@ class DownloadService {
     required Map<String, String> headers,
     required String filename,
     void Function(double progress)? onProgress,
+    void Function(DownloadHandle handle)? onStart,
+    void Function(bool paused)? onPaused,
+    bool allowPause = true,
   }) async {
     _configure();
     await _askNotifications();
@@ -50,17 +86,27 @@ class DownloadService {
       directory: 'tmps',
       updates: Updates.statusAndProgress,
       retries: 3,
-      allowPause: true,
+      allowPause: allowPause,
       displayName: filename,
     );
+
+    onStart?.call(DownloadHandle._(task));
 
     final result = await FileDownloader().download(
       task,
       onProgress: (value) {
         if (value >= 0 && onProgress != null) onProgress(value);
       },
+      onStatus: (status) {
+        if (status == TaskStatus.paused) {
+          onPaused?.call(true);
+        } else if (status == TaskStatus.running || status == TaskStatus.enqueued) {
+          onPaused?.call(false);
+        }
+      },
     );
 
+    if (result.status == TaskStatus.canceled) throw const DownloadCanceled();
     if (result.status != TaskStatus.complete) {
       throw DownloadFailure(_reason(result));
     }

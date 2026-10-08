@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' show RequestAbortedException;
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/storage.dart';
@@ -102,9 +103,14 @@ class FileDownload {
   double progress = 0;
   String? savedPath;
   String? error;
+  String? hint;
+  DownloadHandle? handle;
+  bool canPause = true;
+  bool paused = false;
+  bool canceled = false;
 
   bool get done => savedPath != null;
-  bool get running => savedPath == null && error == null;
+  bool get running => savedPath == null && error == null && !canceled;
 }
 
 class UploadTask {
@@ -120,6 +126,19 @@ class UploadTask {
   int sentBytes = 0;
   String? uid;
   String? error;
+
+  Completer<void> _abort = Completer<void>();
+
+  /// Сигнал для текущего запроса: по нему отправка куска обрывается сразу.
+  Future<void> get abortSignal => _abort.future;
+
+  void armAbort() {
+    if (_abort.isCompleted) _abort = Completer<void>();
+  }
+
+  void triggerAbort() {
+    if (!_abort.isCompleted) _abort.complete();
+  }
 
   double get progress => size <= 0 ? 0 : (sentBytes / size).clamp(0.0, 1.0).toDouble();
   bool get active => status == UploadStatus.queued || status == UploadStatus.uploading || status == UploadStatus.paused;
@@ -227,28 +246,45 @@ class StorageProvider extends ChangeNotifier {
   }
 
   Future<void> downloadArchive() {
-    return _startDownload('tmps-${_item.code}.zip', () => _node.archiveUri(_item.code));
+    return _startDownload(
+      'tmps-${_item.code}.zip',
+      () => _node.archiveUri(_item.code),
+      allowPause: false,
+    );
   }
 
-  Future<void> _startDownload(String name, Uri Function() build) async {
+  Future<void> _startDownload(String name, Uri Function() build, {bool allowPause = true}) async {
     final job = FileDownload(
       id: '${DateTime.now().microsecondsSinceEpoch}-${_downloads.length}',
       name: name,
-    );
+    )..canPause = allowPause;
     _downloads.add(job);
     _ping();
     try {
       final grant = await _ownerGrant();
+      if (job.canceled) return;
       job.savedPath = await _files.save(
         url: build(),
         headers: _node.ownerHeaders(grant),
         filename: name,
+        allowPause: allowPause,
+        onStart: (handle) {
+          job.handle = handle;
+          if (job.canceled) unawaited(_files.cancel(handle));
+        },
+        onPaused: (paused) {
+          job.paused = paused;
+          if (paused) job.hint = null;
+          _ping();
+        },
         onProgress: (value) {
           job.progress = value.clamp(0.0, 1.0).toDouble();
           _ping();
         },
       );
       job.progress = 1;
+    } on DownloadCanceled {
+      job.canceled = true;
     } on ApiException catch (e) {
       job.error = e.message;
     } on DownloadFailure catch (e) {
@@ -260,13 +296,53 @@ class StorageProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> pauseDownload(FileDownload job) async {
+    final handle = job.handle;
+    if (handle == null || !job.running || job.paused || !job.canPause) return;
+    final ok = await _files.pause(handle);
+    job.hint = ok ? null : 'Для этого файла пауза недоступна';
+    if (ok) job.paused = true;
+    _ping();
+  }
+
+  Future<void> resumeDownload(FileDownload job) async {
+    final handle = job.handle;
+    if (handle == null || !job.running || !job.paused) return;
+    final ok = await _files.resume(handle);
+    job.hint = ok ? null : 'Не удалось продолжить, отмените и скачайте заново';
+    if (ok) job.paused = false;
+    _ping();
+  }
+
+  Future<void> cancelDownload(FileDownload job) async {
+    if (!job.running) return;
+    job.canceled = true;
+    job.paused = false;
+    job.hint = null;
+    _ping();
+    final handle = job.handle;
+    if (handle != null) await _files.cancel(handle);
+  }
+
+  Future<void> pauseAllDownloads() async {
+    await Future.wait(_downloads.where((j) => j.running && j.canPause && !j.paused).map(pauseDownload));
+  }
+
+  Future<void> resumeAllDownloads() async {
+    await Future.wait(_downloads.where((j) => j.running && j.paused).map(resumeDownload));
+  }
+
+  Future<void> cancelAllDownloads() async {
+    await Future.wait(_downloads.where((j) => j.running).toList().map(cancelDownload));
+  }
+
   void forgetDownload(FileDownload job) {
     _downloads.remove(job);
     _ping();
   }
 
   void clearFinishedDownloads() {
-    _downloads.removeWhere((d) => d.done || d.error != null);
+    _downloads.removeWhere((d) => d.done || d.error != null || d.canceled);
     _ping();
   }
 
@@ -289,6 +365,7 @@ class StorageProvider extends ChangeNotifier {
   void pause(UploadTask task) {
     if (task.status == UploadStatus.uploading || task.status == UploadStatus.queued) {
       task.status = UploadStatus.paused;
+      task.triggerAbort();
       _ping();
     }
   }
@@ -306,6 +383,7 @@ class StorageProvider extends ChangeNotifier {
     for (final task in _uploads) {
       if (task.status == UploadStatus.uploading || task.status == UploadStatus.queued) {
         task.status = UploadStatus.paused;
+        task.triggerAbort();
       }
     }
     _ping();
@@ -323,14 +401,21 @@ class StorageProvider extends ChangeNotifier {
   }
 
   Future<void> cancel(UploadTask task) async {
+    if (task.status == UploadStatus.done || task.status == UploadStatus.canceled) return;
     final uid = task.uid;
     task.status = UploadStatus.canceled;
+    task.triggerAbort();
     _ping();
     if (uid != null) {
       try {
         await _withGrant((grant) => _node.abortUpload(_item.code, grant, uid));
       } catch (_) {}
     }
+  }
+
+  Future<void> cancelAll() async {
+    final tasks = _uploads.where((t) => t.active).toList();
+    await Future.wait(tasks.map(cancel));
   }
 
   void clearFinished() {
@@ -360,6 +445,7 @@ class StorageProvider extends ChangeNotifier {
   }
 
   Future<void> _runTask(UploadTask task) async {
+    task.armAbort();
     task.status = UploadStatus.uploading;
     task.error = null;
     _ping();
@@ -395,9 +481,21 @@ class StorageProvider extends ChangeNotifier {
 
         final uid = session.uid;
         try {
-          await _withGrant((grant) => _node.putChunk(_item.code, grant, uid, index, bytes));
+          await _withGrant(
+            (grant) => _node.putChunk(
+              _item.code,
+              grant,
+              uid,
+              index,
+              bytes,
+              abort: task.abortSignal,
+            ),
+          );
+        } on RequestAbortedException {
+          return;
         } on ApiException catch (e) {
           if (!e.notFound) rethrow;
+          if (task.status != UploadStatus.uploading) return;
 
           session = await _withGrant(
             (grant) => _node.initUpload(_item.code, grant, task.name, task.size),
