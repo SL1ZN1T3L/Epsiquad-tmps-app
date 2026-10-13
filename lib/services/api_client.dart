@@ -51,8 +51,11 @@ class ApiClient {
   final String baseUrl;
 
   Future<bool>? _refreshing;
+  bool _offline = false;
 
   void close() => _client.close();
+
+  void setOffline(bool value) => _offline = value;
 
   void _resetConnections() {
     if (_fixedClient) return;
@@ -98,6 +101,10 @@ class ApiClient {
     bool auth = true,
     Duration timeout = const Duration(seconds: 15),
   }) async {
+    if (_offline) {
+      throw ApiException('Сеть отключена в Dev Mode');
+    }
+
     Future<http.Response> send() {
       final uri = _uri(path, query);
       final headers = _headers(auth: auth);

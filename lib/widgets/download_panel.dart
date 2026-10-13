@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../icons.dart';
 import '../providers/storage_provider.dart';
 import '../theme.dart';
+import 'dialog_actions.dart';
 
 class DownloadPanel extends StatelessWidget {
   const DownloadPanel({super.key, required this.provider});
@@ -16,11 +17,18 @@ class DownloadPanel extends StatelessWidget {
         title: const Text('Отменить все скачивания?'),
         content: const Text('Недокачанные файлы не сохранятся.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Нет')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Отменить всё', style: TextStyle(color: TmpsColors.danger)),
-          ),
+          DialogActions(children: [
+            FilledButton(
+              style: DialogActions.primaryStyle(ctx),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Отменить всё'),
+            ),
+            TextButton(
+              style: DialogActions.dangerStyle(ctx),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Нет'),
+            ),
+          ]),
         ],
       ),
     );
@@ -39,7 +47,9 @@ class DownloadPanel extends StatelessWidget {
 
     final title = running > 0
         ? 'Скачивание'
-        : (canceled == jobs.length ? 'Скачивание отменено' : 'Скачивание завершено');
+        : (canceled == jobs.length
+            ? 'Скачивание отменено'
+            : 'Скачивание завершено');
 
     return Card(
       child: Padding(
@@ -52,7 +62,8 @@ class DownloadPanel extends StatelessWidget {
                 Expanded(
                   child: Text(
                     title,
-                    style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                    style: const TextStyle(
+                        fontWeight: FontWeight.w700, fontSize: 15),
                   ),
                 ),
                 if (running == 0)
@@ -71,7 +82,9 @@ class DownloadPanel extends StatelessWidget {
                       child: OutlinedButton.icon(
                         icon: TmpsIcon(paused ? Ico.play : Ico.pause, size: 18),
                         label: Text(paused ? 'Продолжить' : 'Пауза'),
-                        onPressed: paused ? provider.resumeAllDownloads : provider.pauseAllDownloads,
+                        onPressed: paused
+                            ? provider.resumeAllDownloads
+                            : provider.pauseAllDownloads,
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -143,14 +156,17 @@ class _DownloadRow extends StatelessWidget {
                         job.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 13.5),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         _info,
                         style: TextStyle(
                           fontSize: 12,
-                          color: job.error != null ? TmpsColors.danger : TmpsColors.muted,
+                          color: job.error != null
+                              ? TmpsColors.danger
+                              : TmpsColors.muted,
                         ),
                       ),
                       if (job.hint != null)
@@ -158,7 +174,8 @@ class _DownloadRow extends StatelessWidget {
                           padding: const EdgeInsets.only(top: 2),
                           child: Text(
                             job.hint!,
-                            style: const TextStyle(fontSize: 12, color: TmpsColors.danger),
+                            style: const TextStyle(
+                                fontSize: 12, color: TmpsColors.danger),
                           ),
                         ),
                     ],

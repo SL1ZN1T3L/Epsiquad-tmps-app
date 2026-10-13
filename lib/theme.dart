@@ -14,6 +14,7 @@ class TmpsColors {
   static const ok = Color(0xFF34D399);
   static const warn = Color(0xFFFBBF24);
   static const danger = Color(0xFFFB4B6B);
+  static const dangerSoft = Color(0xFFE07A8A);
   static const telegram = Color(0xFF2AABEE);
 
   static const gradient = LinearGradient(

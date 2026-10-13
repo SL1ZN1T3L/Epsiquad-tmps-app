@@ -4,6 +4,7 @@ import '../format.dart';
 import '../icons.dart';
 import '../providers/storage_provider.dart';
 import '../theme.dart';
+import 'dialog_actions.dart';
 
 class UploadPanel extends StatelessWidget {
   const UploadPanel({super.key, required this.provider});
@@ -15,13 +16,21 @@ class UploadPanel extends StatelessWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Отменить все загрузки?'),
-        content: const Text('Файлы, которые ещё не загрузились, не сохранятся.'),
+        content:
+            const Text('Файлы, которые ещё не загрузились, не сохранятся.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Нет')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Отменить всё', style: TextStyle(color: TmpsColors.danger)),
-          ),
+          DialogActions(children: [
+            FilledButton(
+              style: DialogActions.primaryStyle(ctx),
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Отменить всё'),
+            ),
+            TextButton(
+              style: DialogActions.dangerStyle(ctx),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Нет'),
+            ),
+          ]),
         ],
       ),
     );
@@ -35,17 +44,24 @@ class UploadPanel extends StatelessWidget {
 
     final active = tasks.where((t) => t.active).length;
     final done = tasks.where((t) => t.status == UploadStatus.done).length;
-    final canceled = tasks.where((t) => t.status == UploadStatus.canceled).length;
+    final canceled =
+        tasks.where((t) => t.status == UploadStatus.canceled).length;
     final paused = tasks.any((t) => t.status == UploadStatus.paused);
-    final totalBytes = tasks.where((t) => t.status != UploadStatus.canceled).fold<int>(0, (a, t) => a + t.size);
-    final sentBytes = tasks.where((t) => t.status != UploadStatus.canceled).fold<int>(
-          0,
-          (a, t) => a + (t.status == UploadStatus.done ? t.size : t.sentBytes),
-        );
+    final totalBytes = tasks
+        .where((t) => t.status != UploadStatus.canceled)
+        .fold<int>(0, (a, t) => a + t.size);
+    final sentBytes =
+        tasks.where((t) => t.status != UploadStatus.canceled).fold<int>(
+              0,
+              (a, t) =>
+                  a + (t.status == UploadStatus.done ? t.size : t.sentBytes),
+            );
 
     final title = active > 0
         ? 'Загрузка · $done из ${tasks.length}'
-        : (canceled == tasks.length ? 'Загрузка отменена' : 'Загрузка завершена');
+        : (canceled == tasks.length
+            ? 'Загрузка отменена'
+            : 'Загрузка завершена');
 
     return Card(
       child: Padding(
@@ -61,14 +77,16 @@ class UploadPanel extends StatelessWidget {
                     children: [
                       Text(
                         title,
-                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w700, fontSize: 15),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         totalBytes > 0
                             ? '${fmtSize(sentBytes)} из ${fmtSize(totalBytes)}'
                             : '${tasks.length} ${plural(tasks.length, 'файл', 'файла', 'файлов')}',
-                        style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+                        style: const TextStyle(
+                            color: TmpsColors.muted, fontSize: 12.5),
                       ),
                     ],
                   ),
@@ -88,7 +106,8 @@ class UploadPanel extends StatelessWidget {
                     child: OutlinedButton.icon(
                       icon: TmpsIcon(paused ? Ico.play : Ico.pause, size: 18),
                       label: Text(paused ? 'Продолжить' : 'Пауза'),
-                      onPressed: paused ? provider.resumeAll : provider.pauseAll,
+                      onPressed:
+                          paused ? provider.resumeAll : provider.pauseAll,
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -107,7 +126,8 @@ class UploadPanel extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 6),
-            for (final task in tasks) _UploadRow(provider: provider, task: task),
+            for (final task in tasks)
+              _UploadRow(provider: provider, task: task),
           ],
         ),
       ),
@@ -175,26 +195,31 @@ class _UploadRow extends StatelessWidget {
                         task.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13.5),
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w600, fontSize: 13.5),
                       ),
                       const SizedBox(height: 2),
                       Text(
                         _info,
                         style: TextStyle(
                           fontSize: 12,
-                          color: task.status == UploadStatus.error ? TmpsColors.danger : TmpsColors.muted,
+                          color: task.status == UploadStatus.error
+                              ? TmpsColors.danger
+                              : TmpsColors.muted,
                         ),
                       ),
                     ],
                   ),
                 ),
-                if (task.status == UploadStatus.uploading || task.status == UploadStatus.queued)
+                if (task.status == UploadStatus.uploading ||
+                    task.status == UploadStatus.queued)
                   IconButton(
                     icon: const TmpsIcon(Ico.pause, size: 22),
                     tooltip: 'Пауза',
                     onPressed: () => provider.pause(task),
                   ),
-                if (task.status == UploadStatus.paused || task.status == UploadStatus.error)
+                if (task.status == UploadStatus.paused ||
+                    task.status == UploadStatus.error)
                   IconButton(
                     icon: const TmpsIcon(Ico.play, size: 22),
                     tooltip: 'Продолжить',

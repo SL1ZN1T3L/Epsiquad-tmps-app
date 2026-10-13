@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../icons.dart';
 import '../models/config.dart';
@@ -11,6 +11,9 @@ import '../services/api_client.dart';
 import '../theme.dart';
 import '../widgets/brand.dart';
 import '../widgets/storage_card.dart';
+import '../widgets/dev_mode_menu.dart';
+import '../widgets/dialog_actions.dart';
+import '../widgets/update_dialog.dart';
 import 'settings_screen.dart';
 import 'storage_screen.dart';
 
@@ -63,7 +66,8 @@ class _StoragesView extends StatelessWidget {
   }
 
   static void _toast(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -75,43 +79,93 @@ class _StoragesView extends StatelessWidget {
     final admin = app.user?.isAdmin ?? false;
     final canCreate = admin || items.length < limit;
 
-    return Scaffold(
-      appBar: AppBar(
-        titleSpacing: 20,
-        title: const Row(
-          children: [
-            BrandMark(size: 30, withText: false),
-            SizedBox(width: 10),
-            Text('Хранилища'),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) _confirmExit(context);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          titleSpacing: 20,
+          title: const Row(
+            children: [
+              BrandMark(size: 30, withText: false),
+              SizedBox(width: 10),
+              Text('Хранилища'),
+            ],
+          ),
+          actions: [
+            IconButton(
+              tooltip: 'Настройки',
+              icon: const TmpsIcon(Ico.settings),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+              ),
+            ),
+            const SizedBox(width: 6),
           ],
         ),
-        actions: [
-          IconButton(
-            tooltip: 'Настройки',
-            icon: const TmpsIcon(Ico.settings),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-          ),
-          const SizedBox(width: 6),
-        ],
-      ),
-      floatingActionButton: canCreate
-          ? FloatingActionButton.extended(
-              onPressed: () => _create(context),
-              backgroundColor: TmpsColors.accent,
-              foregroundColor: Colors.white,
-              icon: const TmpsIcon(Ico.plus),
-              label: const Text('Создать'),
-            )
-          : null,
-      body: RefreshIndicator(
-        color: TmpsColors.accent,
-        backgroundColor: TmpsColors.surface,
-        onRefresh: () => provider.load(silent: true),
-        child: _body(context, app, provider, items, limit, admin),
+        floatingActionButton: app.devMode || canCreate
+            ? Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (app.devMode) ...[
+                    const DevModeMenu(),
+                    const SizedBox(height: 12),
+                  ],
+                  if (canCreate)
+                    FloatingActionButton.extended(
+                      heroTag: 'create-storage',
+                      onPressed: () => _create(context),
+                      backgroundColor: TmpsColors.accent,
+                      foregroundColor: Colors.white,
+                      icon: const TmpsIcon(Ico.plus),
+                      label: const Text('Создать'),
+                    ),
+                ],
+              )
+            : null,
+        body: RefreshIndicator(
+          color: TmpsColors.accent,
+          backgroundColor: TmpsColors.surface,
+          onRefresh: () => provider.load(silent: true),
+          child: _body(context, app, provider, items, limit, admin),
+        ),
       ),
     );
+  }
+
+  Future<void> _confirmExit(BuildContext context) async {
+    final shouldExit = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Выйти из приложения?'),
+        content: const Text(
+          'Приложение будет полностью закрыто.',
+          style: TextStyle(color: TmpsColors.muted, height: 1.4),
+        ),
+        actions: [
+          DialogActions(
+            children: [
+              TextButton(
+                style: DialogActions.dangerStyle(dialogContext),
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Выйти'),
+              ),
+              TextButton(
+                style: DialogActions.dangerStyle(dialogContext),
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Отмена'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+    if (shouldExit == true) {
+      await SystemNavigator.pop();
+    }
   }
 
   Widget _body(
@@ -123,7 +177,8 @@ class _StoragesView extends StatelessWidget {
     bool admin,
   ) {
     if (provider.loading && items.isEmpty) {
-      return const Center(child: CircularProgressIndicator(color: TmpsColors.accent));
+      return const Center(
+          child: CircularProgressIndicator(color: TmpsColors.accent));
     }
     if (provider.error != null && items.isEmpty) {
       return ListView(
@@ -147,7 +202,8 @@ class _StoragesView extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
       children: [
         if (app.outdated) _updateBanner(context, app, required: true),
-        if (!app.outdated && app.update != null) _updateBanner(context, app, required: false),
+        if (!app.outdated && app.update != null)
+          _updateBanner(context, app, required: false),
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
           child: Text(
@@ -163,7 +219,8 @@ class _StoragesView extends StatelessWidget {
             child: EmptyState(
               icon: Ico.box,
               title: 'Пока пусто',
-              subtitle: 'Создайте хранилище, загрузите файлы и отправьте короткую ссылку.',
+              subtitle:
+                  'Создайте хранилище, загрузите файлы и отправьте короткую ссылку.',
             ),
           ),
         for (final item in items) ...[
@@ -181,7 +238,8 @@ class _StoragesView extends StatelessWidget {
     );
   }
 
-  Widget _updateBanner(BuildContext context, AppProvider app, {required bool required}) {
+  Widget _updateBanner(BuildContext context, AppProvider app,
+      {required bool required}) {
     final release = app.update;
     final color = required ? TmpsColors.danger : TmpsColors.accent;
     return Container(
@@ -209,15 +267,21 @@ class _StoragesView extends StatelessWidget {
                   required
                       ? 'Сервер больше не поддерживает эту версию'
                       : 'Версия ${release?.version ?? ''} доступна на GitHub',
-                  style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+                  style:
+                      const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
                 ),
               ],
             ),
           ),
           if (release != null)
-            TextButton(
-              onPressed: () => launchUrl(Uri.parse(release.pageUrl), mode: LaunchMode.externalApplication),
-              child: const Text('Открыть'),
+            FilledButton(
+              style: DialogActions.primaryStyle(context),
+              onPressed: () => showDialog<void>(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) => UpdateDialog(app: app, release: release),
+              ),
+              child: const Text('Обновить'),
             ),
         ],
       ),
@@ -290,7 +354,8 @@ class _CreateSheetState extends State<_CreateSheet> {
             const Text('Новое хранилище',
                 style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
             const SizedBox(height: 18),
-            const Text('Тариф', style: TextStyle(color: TmpsColors.muted, fontSize: 13)),
+            const Text('Тариф',
+                style: TextStyle(color: TmpsColors.muted, fontSize: 13)),
             const SizedBox(height: 8),
             for (final plan in widget.plans) ...[
               _PlanTile(
@@ -302,7 +367,8 @@ class _CreateSheetState extends State<_CreateSheet> {
             ],
             if (_plan.ttlOptions.isNotEmpty) ...[
               const SizedBox(height: 8),
-              const Text('Срок хранения', style: TextStyle(color: TmpsColors.muted, fontSize: 13)),
+              const Text('Срок хранения',
+                  style: TextStyle(color: TmpsColors.muted, fontSize: 13)),
               const SizedBox(height: 8),
               Wrap(
                 spacing: 8,
@@ -329,7 +395,8 @@ class _CreateSheetState extends State<_CreateSheet> {
                   _plan.extendable
                       ? 'Продлить можно позже, суммарно до ${_hoursLabel(_plan.maxLifetimeHours!)} с момента создания.'
                       : 'Этот тариф не продлевается.',
-                  style: const TextStyle(color: TmpsColors.faint, fontSize: 12.5, height: 1.4),
+                  style: const TextStyle(
+                      color: TmpsColors.faint, fontSize: 12.5, height: 1.4),
                 ),
               ],
             ],
@@ -345,7 +412,8 @@ class _CreateSheetState extends State<_CreateSheet> {
             const SizedBox(height: 18),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(
-                _CreateRequest(plan: _plan.id, ttlHours: _ttl, title: _title.text),
+                _CreateRequest(
+                    plan: _plan.id, ttlHours: _ttl, title: _title.text),
               ),
               child: const Text('Создать'),
             ),
@@ -379,7 +447,8 @@ class _CreateSheetState extends State<_CreateSheet> {
 }
 
 class _PlanTile extends StatelessWidget {
-  const _PlanTile({required this.plan, required this.selected, required this.onTap});
+  const _PlanTile(
+      {required this.plan, required this.selected, required this.onTap});
 
   final PlanInfo plan;
   final bool selected;
@@ -395,7 +464,8 @@ class _PlanTile extends StatelessWidget {
         decoration: BoxDecoration(
           color: selected ? const Color(0x247C6CFF) : TmpsColors.surface,
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: selected ? TmpsColors.accent : TmpsColors.border),
+          border: Border.all(
+              color: selected ? TmpsColors.accent : TmpsColors.border),
         ),
         child: Row(
           children: [
@@ -407,12 +477,14 @@ class _PlanTile extends StatelessWidget {
                     children: [
                       Flexible(
                         child: Text(plan.name,
-                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w700, fontSize: 15)),
                       ),
                       if (plan.adminOnly) ...[
                         const SizedBox(width: 8),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 7, vertical: 2),
                           decoration: BoxDecoration(
                             color: const Color(0x2622D3EE),
                             borderRadius: BorderRadius.circular(6),
@@ -432,7 +504,8 @@ class _PlanTile extends StatelessWidget {
                   const SizedBox(height: 3),
                   Text(
                     plan.description,
-                    style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5, height: 1.35),
+                    style: const TextStyle(
+                        color: TmpsColors.muted, fontSize: 12.5, height: 1.35),
                   ),
                 ],
               ),
@@ -440,7 +513,10 @@ class _PlanTile extends StatelessWidget {
             const SizedBox(width: 12),
             Text(
               _short(plan.quotaBytes),
-              style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 18, letterSpacing: -0.5),
+              style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 18,
+                  letterSpacing: -0.5),
             ),
           ],
         ),
@@ -453,7 +529,9 @@ class _PlanTile extends StatelessWidget {
     const mib = 1024 * 1024;
     if (bytes >= gib) {
       final value = bytes / gib;
-      final text = value == value.roundToDouble() ? value.round().toString() : value.toStringAsFixed(1);
+      final text = value == value.roundToDouble()
+          ? value.round().toString()
+          : value.toStringAsFixed(1);
       return '$text ГБ';
     }
     return '${(bytes / mib).round()} МБ';

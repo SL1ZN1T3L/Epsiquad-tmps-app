@@ -14,7 +14,9 @@ class AuthService {
 
   final ApiClient _api;
 
-  Map<String, dynamic> _devicePayload(String id, String name, String appVersion) => {
+  Map<String, dynamic> _devicePayload(
+          String id, String name, String appVersion) =>
+      {
         'id': id,
         'name': name,
         'platform': 'android',
@@ -44,7 +46,8 @@ class AuthService {
     );
     return LoginResult(
       tokens: TokenPair.fromJson(data),
-      user: AppUser.fromJson((data['user'] as Map<String, dynamic>?) ?? const {}),
+      user:
+          AppUser.fromJson((data['user'] as Map<String, dynamic>?) ?? const {}),
     );
   }
 
@@ -80,20 +83,32 @@ class AuthService {
     if (status == 'pending') return null;
     if (status != 'approved') {
       throw ApiException(
-        status == 'declined' ? 'Вход отклонён в боте' : 'Срок подтверждения истёк, начните заново',
+        status == 'declined'
+            ? 'Вход отклонён в боте'
+            : 'Срок подтверждения истёк, начните заново',
       );
     }
     return LoginResult(
       tokens: TokenPair.fromJson(data),
-      user: AppUser.fromJson((data['user'] as Map<String, dynamic>?) ?? const {}),
+      user:
+          AppUser.fromJson((data['user'] as Map<String, dynamic>?) ?? const {}),
     );
   }
 
-  Future<TokenPair> refresh(String refreshToken) async {
+  Future<TokenPair> refresh(
+    String refreshToken, {
+    String? deviceId,
+    String? deviceName,
+    String? appVersion,
+  }) async {
+    final body = <String, dynamic>{'refresh_token': refreshToken};
+    if (deviceId != null && deviceName != null && appVersion != null) {
+      body['device'] = _devicePayload(deviceId, deviceName, appVersion);
+    }
     final data = await _api.post(
       '$kApiPrefix/auth/refresh',
       auth: false,
-      body: {'refresh_token': refreshToken},
+      body: body,
     );
     return TokenPair.fromJson(data);
   }

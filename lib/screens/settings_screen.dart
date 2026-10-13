@@ -10,6 +10,7 @@ import '../services/api_client.dart';
 import '../theme.dart';
 import 'pin_screen.dart';
 import '../widgets/update_dialog.dart';
+import '../widgets/dialog_actions.dart';
 
 Future<void> _changePin(BuildContext context, AppProvider app) async {
   final current = await askPin(context, 'Текущий пин-код');
@@ -27,7 +28,8 @@ Future<void> _changePin(BuildContext context, AppProvider app) async {
   _say(context, error ?? 'Пин-код изменён');
 }
 
-Future<void> _toggleBiometric(BuildContext context, AppProvider app, bool value) async {
+Future<void> _toggleBiometric(
+    BuildContext context, AppProvider app, bool value) async {
   String? pin;
   if (value) {
     pin = await askPin(context, 'Подтвердите пин-кодом');
@@ -52,6 +54,8 @@ class SettingsScreen extends StatefulWidget {
 class _SettingsScreenState extends State<SettingsScreen> {
   List<DeviceEntry>? _devices;
   String? _devicesError;
+  int _versionTaps = 0;
+  DateTime? _lastVersionTap;
 
   @override
   void initState() {
@@ -61,7 +65,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _loadDevices() async {
     try {
-      final list = await context.read<AppProvider>().devices();
+      final app = context.read<AppProvider>();
+      final list = await app.devices();
       if (!mounted) return;
       setState(() {
         _devices = list;
@@ -86,12 +91,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
           style: const TextStyle(color: TmpsColors.muted, height: 1.45),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Отмена')),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: TmpsColors.danger),
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Отключить'),
-          ),
+          DialogActions(children: [
+            TextButton(
+              style: DialogActions.dangerStyle(ctx),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Отключить'),
+            ),
+            TextButton(
+              style: DialogActions.dangerStyle(ctx),
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Отмена'),
+            ),
+          ]),
         ],
       ),
     );
@@ -103,12 +114,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
         if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
         return;
       }
+
       await _loadDevices();
     } on ApiException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(e.message)));
       }
     }
+  }
+
+  Future<void> _tapVersion(AppProvider app) async {
+    final now = DateTime.now();
+    if (_lastVersionTap == null ||
+        now.difference(_lastVersionTap!) > const Duration(seconds: 2)) {
+      _versionTaps = 0;
+    }
+    _lastVersionTap = now;
+    _versionTaps++;
+    if (_versionTaps < 5) return;
+    _versionTaps = 0;
+    await app.setDevMode(!app.devMode);
+    if (!mounted) return;
+    _say(context,
+        app.devMode ? 'Dev Mode включён, сеть отключена' : 'Dev Mode выключен');
   }
 
   @override
@@ -153,25 +182,34 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(user?.displayName ?? 'Аккаунт',
-                            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                            style: const TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w700)),
                         const SizedBox(height: 3),
                         Text(
-                          user?.login ?? (user?.tgUsername != null ? '@${user!.tgUsername}' : 'Telegram'),
-                          style: const TextStyle(color: TmpsColors.muted, fontSize: 13),
+                          user?.login ??
+                              (user?.tgUsername != null
+                                  ? '@${user!.tgUsername}'
+                                  : 'Telegram'),
+                          style: const TextStyle(
+                              color: TmpsColors.muted, fontSize: 13),
                         ),
                       ],
                     ),
                   ),
                   if (user?.isAdmin ?? false)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 9, vertical: 4),
                       decoration: BoxDecoration(
                         color: const Color(0x1FFBBF24),
                         borderRadius: BorderRadius.circular(99),
                         border: Border.all(color: const Color(0x4DFBBF24)),
                       ),
                       child: const Text('admin',
-                          style: TextStyle(color: TmpsColors.warn, fontSize: 12, fontWeight: FontWeight.w600)),
+                          style: TextStyle(
+                              color: TmpsColors.warn,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600)),
                     ),
                 ],
               ),
@@ -186,7 +224,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   leading: const TmpsIcon(Ico.lock, color: TmpsColors.muted),
                   title: const Text('Изменить пин-код'),
                   subtitle: const Text('Основной способ входа',
-                      style: TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
+                      style:
+                          TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
                   onTap: () => _changePin(context, app),
                 ),
                 SwitchListTile(
@@ -200,7 +239,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     app.biometricAvailable
                         ? 'Быстрее пин-кода. Пин-код продолжит работать всегда'
                         : 'На этом устройстве биометрия недоступна',
-                    style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+                    style: const TextStyle(
+                        color: TmpsColors.muted, fontSize: 12.5),
                   ),
                 ),
               ],
@@ -219,45 +259,76 @@ class _SettingsScreenState extends State<SettingsScreen> {
           Card(
             child: Column(
               children: [
-                ListTile(
-                  title: const Text('Версия приложения'),
-                  trailing: Text(app.appVersion, style: const TextStyle(color: TmpsColors.muted)),
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => _tapVersion(app),
+                  onLongPress: () => _tapVersion(app),
+                  child: ListTile(
+                    title: const Text('Версия приложения'),
+                    subtitle: app.devMode
+                        ? const Text(
+                            'DEV MODE · сеть отключена',
+                            style: TextStyle(
+                              color: TmpsColors.warn,
+                              fontSize: 12.5,
+                            ),
+                          )
+                        : null,
+                    trailing: Text(
+                      app.appVersion,
+                      style: Theme.of(context)
+                          .textTheme
+                          .bodyLarge
+                          ?.copyWith(color: TmpsColors.muted),
+                    ),
+                  ),
                 ),
                 ListTile(
                   title: const Text('Версия сервера'),
-                  trailing: Text(config?.serverVersion ?? '-',
-                      style: const TextStyle(color: TmpsColors.muted)),
+                  trailing: Text(
+                    config?.serverVersion ?? '-',
+                    style: Theme.of(context)
+                        .textTheme
+                        .bodyLarge
+                        ?.copyWith(color: TmpsColors.muted),
+                  ),
                 ),
                 if (app.update != null)
                   ListTile(
-                    leading: const TmpsIcon(Ico.download, color: TmpsColors.accent),
+                    leading:
+                        const TmpsIcon(Ico.download, color: TmpsColors.accent),
                     title: Text('Доступна версия ${app.update!.version}'),
                     subtitle: const Text('Скачать и установить',
-                        style: TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
+                        style:
+                            TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
                     onTap: () => showDialog<void>(
                       context: context,
                       barrierDismissible: false,
-                      builder: (_) => UpdateDialog(app: app, release: app.update!),
+                      builder: (_) =>
+                          UpdateDialog(app: app, release: app.update!),
                     ),
                   )
                 else
                   ListTile(
                     title: const Text('Проверить обновления'),
-                    trailing: const TmpsIcon(Ico.refresh, color: TmpsColors.muted),
+                    trailing:
+                        const TmpsIcon(Ico.refresh, color: TmpsColors.muted),
                     onTap: () async {
                       await app.checkForUpdate();
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text(app.update == null
-                            ? 'У вас последняя версия'
-                            : 'Доступна версия ${app.update!.version}')),
+                        SnackBar(
+                            content: Text(app.update == null
+                                ? 'У вас последняя версия'
+                                : 'Доступна версия ${app.update!.version}')),
                       );
                     },
                   ),
                 if ((config?.publicUrl ?? '').isNotEmpty)
                   ListTile(
                     title: const Text('Открыть сайт'),
-                    trailing: const TmpsIcon(Ico.external, color: TmpsColors.muted),
+                    trailing:
+                        const TmpsIcon(Ico.external, color: TmpsColors.muted),
                     onTap: () => launchUrl(Uri.parse(config!.publicUrl),
                         mode: LaunchMode.externalApplication),
                   ),
@@ -268,10 +339,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
           OutlinedButton.icon(
             onPressed: () async {
               await app.signOut();
-              if (context.mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+              if (context.mounted) {
+                Navigator.of(context).popUntil((route) => route.isFirst);
+              }
             },
             icon: const TmpsIcon(Ico.logout, color: TmpsColors.danger),
-            label: const Text('Выйти', style: TextStyle(color: TmpsColors.danger)),
+            label:
+                const Text('Выйти', style: TextStyle(color: TmpsColors.danger)),
           ),
         ],
       ),
@@ -295,15 +369,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_devicesError != null) {
       return ListTile(
         title: const Text('Не удалось загрузить устройства'),
-        subtitle: Text(_devicesError!, style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
-        trailing: IconButton(icon: const TmpsIcon(Ico.refresh), onPressed: _loadDevices),
+        subtitle: Text(_devicesError!,
+            style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
+        trailing: IconButton(
+            icon: const TmpsIcon(Ico.refresh), onPressed: _loadDevices),
       );
     }
     final devices = _devices;
     if (devices == null) {
       return const Padding(
         padding: EdgeInsets.all(24),
-        child: Center(child: CircularProgressIndicator(color: TmpsColors.accent)),
+        child:
+            Center(child: CircularProgressIndicator(color: TmpsColors.accent)),
       );
     }
     if (devices.isEmpty) {
@@ -319,11 +396,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             title: Row(
               children: [
-                Flexible(child: Text(device.name, overflow: TextOverflow.ellipsis)),
+                Flexible(
+                    child: Text(device.name, overflow: TextOverflow.ellipsis)),
                 if (device.current) ...[
                   const SizedBox(width: 8),
                   const Text('это устройство',
-                      style: TextStyle(color: TmpsColors.accent, fontSize: 11.5)),
+                      style:
+                          TextStyle(color: TmpsColors.accent, fontSize: 11.5)),
                 ],
               ],
             ),

@@ -8,6 +8,7 @@ import '../icons.dart';
 import '../providers/app_provider.dart';
 import '../services/update_service.dart';
 import '../theme.dart';
+import 'dialog_actions.dart';
 
 enum _Stage { ready, downloading, checking, done, failed, missing }
 
@@ -51,7 +52,9 @@ class _UpdateDialogState extends State<UpdateDialog> {
           if (!mounted) return;
           setState(() {
             _progress = value;
-            if (value >= 1 && _stage == _Stage.downloading) _stage = _Stage.checking;
+            if (value >= 1 && _stage == _Stage.downloading) {
+              _stage = _Stage.checking;
+            }
           });
         },
       );
@@ -94,7 +97,9 @@ class _UpdateDialogState extends State<UpdateDialog> {
     switch (_stage) {
       case _Stage.ready:
         final size = _apk?.size ?? 0;
-        return size > 0 ? '${_apk!.name} · ${fmtSize(size)}' : (_apk?.name ?? '');
+        return size > 0
+            ? '${_apk!.name} · ${fmtSize(size)}'
+            : (_apk?.name ?? '');
       case _Stage.downloading:
         return 'Скачивание, ${(_progress * 100).round()} %';
       case _Stage.checking:
@@ -121,7 +126,9 @@ class _UpdateDialogState extends State<UpdateDialog> {
           Text(
             _status,
             style: TextStyle(
-              color: _stage == _Stage.failed ? TmpsColors.danger : TmpsColors.muted,
+              color: _stage == _Stage.failed
+                  ? TmpsColors.danger
+                  : TmpsColors.muted,
               fontSize: 13,
             ),
           ),
@@ -133,7 +140,8 @@ class _UpdateDialogState extends State<UpdateDialog> {
                 value: _stage == _Stage.checking ? null : _progress,
                 minHeight: 4,
                 backgroundColor: TmpsColors.border,
-                valueColor: const AlwaysStoppedAnimation<Color>(TmpsColors.accent),
+                valueColor:
+                    const AlwaysStoppedAnimation<Color>(TmpsColors.accent),
               ),
             ),
           ],
@@ -141,35 +149,44 @@ class _UpdateDialogState extends State<UpdateDialog> {
             const SizedBox(height: 14),
             const Text(
               'Файл скачивается с GitHub и сверяется с опубликованной контрольной суммой. Установку подтверждает система.',
-              style: TextStyle(color: TmpsColors.faint, fontSize: 12, height: 1.4),
+              style:
+                  TextStyle(color: TmpsColors.faint, fontSize: 12, height: 1.4),
             ),
           ],
         ],
       ),
       actions: [
-        TextButton(
-          onPressed: () => launchUrl(
-            Uri.parse(widget.release.pageUrl),
-            mode: LaunchMode.externalApplication,
+        DialogActions(children: [
+          if (_stage == _Stage.ready || _stage == _Stage.failed)
+            FilledButton.icon(
+              style: DialogActions.primaryStyle(context),
+              onPressed: _apk == null ? null : _run,
+              icon: const TmpsIcon(Ico.download, size: 18),
+              label: Text(_stage == _Stage.failed ? 'Повторить' : 'Обновить'),
+            ),
+          if (_stage == _Stage.done)
+            FilledButton.icon(
+              style: DialogActions.primaryStyle(context),
+              onPressed: _openInstaller,
+              icon: const TmpsIcon(Ico.check, size: 18),
+              label: const Text('Установить'),
+            ),
+          TextButton(
+            style: TextButton.styleFrom(
+              textStyle: Theme.of(context).textTheme.labelLarge,
+            ),
+            onPressed: () => launchUrl(
+              Uri.parse(widget.release.pageUrl),
+              mode: LaunchMode.externalApplication,
+            ),
+            child: const Text('Страница релиза'),
           ),
-          child: const Text('Страница релиза'),
-        ),
-        TextButton(
-          onPressed: busy ? null : () => Navigator.of(context).pop(),
-          child: const Text('Закрыть'),
-        ),
-        if (_stage == _Stage.ready || _stage == _Stage.failed)
-          FilledButton.icon(
-            onPressed: _apk == null ? null : _run,
-            icon: const TmpsIcon(Ico.download, size: 18),
-            label: Text(_stage == _Stage.failed ? 'Повторить' : 'Обновить'),
+          TextButton(
+            style: DialogActions.dangerStyle(context),
+            onPressed: busy ? null : () => Navigator.of(context).pop(),
+            child: const Text('Закрыть'),
           ),
-        if (_stage == _Stage.done)
-          FilledButton.icon(
-            onPressed: _openInstaller,
-            icon: const TmpsIcon(Ico.check, size: 18),
-            label: const Text('Установить'),
-          ),
+        ]),
       ],
     );
   }

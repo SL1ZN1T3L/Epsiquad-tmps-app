@@ -19,7 +19,8 @@ class AppProvider extends ChangeNotifier {
   AppProvider({SecureStore? store, UpdateService? updates})
       : _store = store ?? SecureStore(),
         _updates = updates ?? UpdateService() {
-    api = ApiClient(accessToken: () => _tokens?.accessToken, refresh: _refreshTokens);
+    api = ApiClient(
+        accessToken: () => _tokens?.accessToken, refresh: _refreshTokens);
     auth = AuthService(api);
     storages = StorageService(api);
   }
@@ -41,6 +42,7 @@ class AppProvider extends ChangeNotifier {
   String _appVersion = '1.0.0';
   bool _biometricEnabled = false;
   bool _biometricAvailable = false;
+  bool _devMode = false;
   bool _autoBiometricEnabled = true;
   String? _notice;
   ReleaseInfo? _update;
@@ -58,6 +60,7 @@ class AppProvider extends ChangeNotifier {
   String? get notice => _notice;
   ReleaseInfo? get update => _update;
   bool get signedIn => _tokens != null && _user != null;
+  bool get devMode => _devMode;
 
   bool get outdated {
     final cfg = _config;
@@ -83,7 +86,8 @@ class AppProvider extends ChangeNotifier {
     try {
       _config = await auth.config();
     } catch (_) {
-      _notice = 'Не удалось получить настройки сервера. Показаны сохранённые данные';
+      _notice =
+          'Не удалось получить настройки сервера. Показаны сохранённые данные';
     }
 
     _stage = await _store.hasPin() ? AppStage.locked : AppStage.signedOut;
@@ -94,7 +98,9 @@ class AppProvider extends ChangeNotifier {
     try {
       if (!await _store.openWithPin(pin)) {
         final left = SecureStore.maxAttempts - await _store.failedAttempts();
-        return left <= 3 ? 'Неверный пин-код, осталось попыток: $left' : 'Неверный пин-код';
+        return left <= 3
+            ? 'Неверный пин-код, осталось попыток: $left'
+            : 'Неверный пин-код';
       }
     } on PinLocked {
       _afterWipe();
@@ -151,7 +157,9 @@ class AppProvider extends ChangeNotifier {
 
   Future<String?> changePin(String current, String next) async {
     try {
-      if (!await _store.openWithPin(current)) return 'Текущий пин-код не подошёл';
+      if (!await _store.openWithPin(current)) {
+        return 'Текущий пин-код не подошёл';
+      }
     } on PinLocked {
       _afterWipe();
       return 'Слишком много попыток. Данные входа стёрты, войдите заново';
@@ -164,7 +172,12 @@ class AppProvider extends ChangeNotifier {
 
   Future<void> _restore(String refresh) async {
     try {
-      _tokens = await auth.refresh(refresh);
+      _tokens = await auth.refresh(
+        refresh,
+        deviceId: _deviceId,
+        deviceName: _deviceName,
+        appVersion: _appVersion,
+      );
       await _store.writeRefreshToken(_tokens!.refreshToken);
       _applyProfile(await auth.me());
       _notice = null;
@@ -197,7 +210,12 @@ class AppProvider extends ChangeNotifier {
     final current = _tokens?.refreshToken ?? await _store.readRefreshToken();
     if (current == null || current.isEmpty) return false;
     try {
-      _tokens = await auth.refresh(current);
+      _tokens = await auth.refresh(
+        current,
+        deviceId: _deviceId,
+        deviceName: _deviceName,
+        appVersion: _appVersion,
+      );
       await _store.writeRefreshToken(_tokens!.refreshToken);
       return true;
     } on ApiException {
@@ -297,6 +315,7 @@ class AppProvider extends ChangeNotifier {
     _tokens = null;
     _user = null;
     _update = null;
+    await setDevMode(false);
     _stage = AppStage.signedOut;
     notifyListeners();
   }
@@ -326,11 +345,19 @@ class AppProvider extends ChangeNotifier {
   Future<void> revokeDevice(int id) => auth.revokeDevice(id);
 
   Future<void> checkForUpdate() async {
+    if (_devMode) return;
     final repo = _config?.repoUrl;
     if (repo == null || repo.isEmpty) return;
-    final found = await _updates.latest(repoUrl: repo, currentVersion: _appVersion);
+    final found =
+        await _updates.latest(repoUrl: repo, currentVersion: _appVersion);
     if (found == null) return;
     _update = found;
+    notifyListeners();
+  }
+
+  Future<void> setDevMode(bool value) async {
+    _devMode = value;
+    api.setOffline(value);
     notifyListeners();
   }
 

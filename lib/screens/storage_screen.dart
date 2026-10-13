@@ -16,6 +16,7 @@ import '../providers/storages_provider.dart';
 import '../services/api_client.dart';
 import '../services/node_service.dart';
 import '../theme.dart';
+import '../widgets/dialog_actions.dart';
 import '../widgets/brand.dart';
 import '../widgets/download_panel.dart';
 import '../widgets/file_tile.dart';
@@ -49,10 +50,12 @@ class _StorageView extends StatelessWidget {
   final StoragesProvider storages;
 
   void _toast(BuildContext context, String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text(message)));
   }
 
-  Future<void> _pickFiles(BuildContext context, StorageProvider provider) async {
+  Future<void> _pickFiles(
+      BuildContext context, StorageProvider provider) async {
     final picked = await FilePicker.pickFiles();
     if (picked.isEmpty) return;
 
@@ -81,17 +84,20 @@ class _StorageView extends StatelessWidget {
       return;
     }
     if (skipped > 0) {
-      _toast(context, 'Пропущено файлов: $skipped - не удалось определить размер');
+      _toast(
+          context, 'Пропущено файлов: $skipped - не удалось определить размер');
     }
     final total = sources.fold<int>(0, (sum, f) => sum + f.size);
     if (total > provider.freeBytes) {
-      _toast(context, 'Не хватает места: нужно ${fmtSize(total)}, свободно ${fmtSize(provider.freeBytes)}');
+      _toast(context,
+          'Не хватает места: нужно ${fmtSize(total)}, свободно ${fmtSize(provider.freeBytes)}');
       return;
     }
     provider.enqueue(sources);
   }
 
-  Future<void> _run(BuildContext context, Future<void> Function() action, String success) async {
+  Future<void> _run(BuildContext context, Future<void> Function() action,
+      String success) async {
     try {
       await action();
       if (context.mounted) _toast(context, success);
@@ -144,7 +150,8 @@ class _StorageView extends StatelessWidget {
             if (provider.loading && state == null)
               const Padding(
                 padding: EdgeInsets.symmetric(vertical: 40),
-                child: Center(child: CircularProgressIndicator(color: TmpsColors.accent)),
+                child: Center(
+                    child: CircularProgressIndicator(color: TmpsColors.accent)),
               )
             else if (provider.files.isEmpty)
               const Padding(
@@ -166,7 +173,8 @@ class _StorageView extends StatelessWidget {
                     ShareParams(text: provider.fileUri(file).toString()),
                   ),
                   onDownload: () => unawaited(provider.download(file)),
-                  onDelete: () => _confirmDeleteFile(context, provider, file.name),
+                  onDelete: () =>
+                      _confirmDeleteFile(context, provider, file.name),
                 ),
           ],
         ),
@@ -190,7 +198,8 @@ class _StorageView extends StatelessWidget {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                     color: TmpsColors.surface2,
                     borderRadius: BorderRadius.circular(99),
@@ -207,7 +216,8 @@ class _StorageView extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Text('${item.planName} · ${fmtSize(item.quotaBytes)}',
-                    style: const TextStyle(color: TmpsColors.muted, fontSize: 13)),
+                    style:
+                        const TextStyle(color: TmpsColors.muted, fontSize: 13)),
               ],
             ),
             const SizedBox(height: 14),
@@ -225,7 +235,8 @@ class _StorageView extends StatelessWidget {
                       item.url.replaceFirst(RegExp(r'^https?://'), ''),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 13.5),
+                      style: const TextStyle(
+                          fontFamily: 'monospace', fontSize: 13.5),
                     ),
                   ),
                   IconButton(
@@ -234,21 +245,24 @@ class _StorageView extends StatelessWidget {
                     tooltip: 'Копировать',
                     onPressed: () async {
                       await Clipboard.setData(ClipboardData(text: item.url));
-                      if (context.mounted) _toast(context, 'Ссылка скопирована');
+                      if (context.mounted) {
+                        _toast(context, 'Ссылка скопирована');
+                      }
                     },
                   ),
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.share, size: 19),
                     tooltip: 'Поделиться',
-                    onPressed: () => SharePlus.instance.share(ShareParams(text: item.url)),
+                    onPressed: () =>
+                        SharePlus.instance.share(ShareParams(text: item.url)),
                   ),
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.external, size: 19),
                     tooltip: 'Открыть в браузере',
-                    onPressed: () =>
-                        launchUrl(Uri.parse(item.url), mode: LaunchMode.externalApplication),
+                    onPressed: () => launchUrl(Uri.parse(item.url),
+                        mode: LaunchMode.externalApplication),
                   ),
                 ],
               ),
@@ -260,7 +274,8 @@ class _StorageView extends StatelessWidget {
                   child: _Stat(
                     label: 'Осталось',
                     value: left == null ? 'бессрочно' : fmtLeft(left),
-                    sub: item.unlimited ? null : 'до ${fmtDate(item.expiresAt)}',
+                    sub:
+                        item.unlimited ? null : 'до ${fmtDate(item.expiresAt)}',
                   ),
                 ),
                 Expanded(
@@ -357,7 +372,8 @@ class _StorageView extends StatelessWidget {
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        const Text('Файлы', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        const Text('Файлы',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
         Text('$count ${plural(count, 'файл', 'файла', 'файлов')}',
             style: const TextStyle(color: TmpsColors.muted, fontSize: 13)),
       ],
@@ -376,7 +392,9 @@ class _StorageView extends StatelessWidget {
         children: [
           const TmpsIcon(Ico.alert, color: TmpsColors.danger, size: 20),
           const SizedBox(width: 10),
-          Expanded(child: Text(message, style: const TextStyle(color: TmpsColors.danger))),
+          Expanded(
+              child: Text(message,
+                  style: const TextStyle(color: TmpsColors.danger))),
         ],
       ),
     );
@@ -385,12 +403,14 @@ class _StorageView extends StatelessWidget {
   Future<void> _confirmDeleteFile(
       BuildContext context, StorageProvider provider, String name) async {
     final ok = await _confirm(context,
-        title: 'Удалить «$name»?', text: 'Файл исчезнет у всех, у кого есть ссылка.');
+        title: 'Удалить «$name»?',
+        text: 'Файл исчезнет у всех, у кого есть ссылка.');
     if (!ok || !context.mounted) return;
     await _run(context, () => provider.deleteFiles([name]), 'Файл удалён');
   }
 
-  Future<void> _onMenu(BuildContext context, StorageProvider provider, String action) async {
+  Future<void> _onMenu(
+      BuildContext context, StorageProvider provider, String action) async {
     final item = provider.item;
     switch (action) {
       case 'zip':
@@ -398,7 +418,8 @@ class _StorageView extends StatelessWidget {
         break;
 
       case 'rename':
-        final title = await _prompt(context, 'Название хранилища', item.title ?? '');
+        final title =
+            await _prompt(context, 'Название хранилища', item.title ?? '');
         if (title == null || !context.mounted) return;
         await _run(context, () async {
           final updated = await storages.rename(item.code, title);
@@ -452,7 +473,8 @@ class _StorageView extends StatelessWidget {
       case 'rotate':
         final ok = await _confirm(context,
             title: 'Сменить ссылку?',
-            text: 'Старая ссылка перестанет работать. Файлы останутся на месте.');
+            text:
+                'Старая ссылка перестанет работать. Файлы останутся на месте.');
         if (!ok || !context.mounted) return;
         await _run(context, () async {
           final updated = await storages.rotate(item.code);
@@ -504,18 +526,22 @@ class _ActionButton extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: danger ? const Color(0x4DFB4B6B) : TmpsColors.border),
+            border: Border.all(
+                color: danger ? const Color(0x4DFB4B6B) : TmpsColors.border),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              TmpsIcon(icon, size: 21, color: danger ? TmpsColors.danger : TmpsColors.accent),
+              TmpsIcon(icon,
+                  size: 21,
+                  color: danger ? TmpsColors.danger : TmpsColors.accent),
               const SizedBox(height: 6),
               Text(
                 label,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600, color: color),
+                style: TextStyle(
+                    fontSize: 12.5, fontWeight: FontWeight.w600, color: color),
               ),
             ],
           ),
@@ -537,13 +563,18 @@ class _Stat extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label, style: const TextStyle(color: TmpsColors.muted, fontSize: 12)),
+        Text(label,
+            style: const TextStyle(color: TmpsColors.muted, fontSize: 12)),
         const SizedBox(height: 3),
         Text(value,
-            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, letterSpacing: -0.3)),
+            style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w700,
+                letterSpacing: -0.3)),
         if (sub != null) ...[
           const SizedBox(height: 2),
-          Text(sub!, style: const TextStyle(color: TmpsColors.faint, fontSize: 12)),
+          Text(sub!,
+              style: const TextStyle(color: TmpsColors.faint, fontSize: 12)),
         ],
       ],
     );
@@ -556,33 +587,53 @@ Future<bool> _confirm(BuildContext context,
     context: context,
     builder: (ctx) => AlertDialog(
       title: Text(title),
-      content: Text(text, style: const TextStyle(color: TmpsColors.muted, height: 1.45)),
+      content: Text(text,
+          style: const TextStyle(color: TmpsColors.muted, height: 1.45)),
       actions: [
-        TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Отмена')),
-        FilledButton(
-          style: danger ? FilledButton.styleFrom(backgroundColor: TmpsColors.danger) : null,
-          onPressed: () => Navigator.of(ctx).pop(true),
-          child: Text(danger ? 'Удалить' : 'Продолжить'),
-        ),
+        DialogActions(children: [
+          if (danger)
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: TmpsColors.danger,
+                side: const BorderSide(color: TmpsColors.danger),
+              ),
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: Text(danger ? 'Удалить' : 'Продолжить'),
+            )
+          else
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Продолжить'),
+            ),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Отмена')),
+        ]),
       ],
     ),
   );
   return result ?? false;
 }
 
-Future<String?> _prompt(BuildContext context, String title, String initial) async {
+Future<String?> _prompt(
+    BuildContext context, String title, String initial) async {
   final controller = TextEditingController(text: initial);
   final result = await showDialog<String>(
     context: context,
     builder: (ctx) => AlertDialog(
       title: Text(title),
-      content: TextField(controller: controller, maxLength: 64, autofocus: true),
+      content:
+          TextField(controller: controller, maxLength: 64, autofocus: true),
       actions: [
-        TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Отмена')),
-        FilledButton(
-          onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
-          child: const Text('Сохранить'),
-        ),
+        DialogActions(children: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+            child: const Text('Сохранить'),
+          ),
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Отмена')),
+        ]),
       ],
     ),
   );
@@ -604,7 +655,9 @@ Future<T?> _pickOption<T>(
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(height: 16),
-          Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          Text(title,
+              style:
+                  const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
           for (final option in options)
             ListTile(
@@ -662,7 +715,8 @@ Future<PlanOption?> _pickPlan(BuildContext context, List<PlanOption> options) {
                   fontSize: 12.5,
                 ),
               ),
-              onTap: option.available ? () => Navigator.of(ctx).pop(option) : null,
+              onTap:
+                  option.available ? () => Navigator.of(ctx).pop(option) : null,
             ),
           const SizedBox(height: 12),
         ],

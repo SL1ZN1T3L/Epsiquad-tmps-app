@@ -23,7 +23,8 @@ class AppUser {
     return AppUser(
       id: (json['id'] as num?)?.toInt() ?? 0,
       login: json['login'] as String?,
-      displayName: json['name'] as String? ?? json['login'] as String? ?? 'Аккаунт',
+      displayName:
+          json['name'] as String? ?? json['login'] as String? ?? 'Аккаунт',
       tgId: (json['tg_id'] as num?)?.toInt(),
       tgUsername: json['tg_username'] as String?,
       hasPassword: json['has_password'] as bool? ?? false,
@@ -47,15 +48,18 @@ class Profile {
 
   factory Profile.fromJson(Map<String, dynamic> json) {
     return Profile(
-      user: AppUser.fromJson((json['user'] as Map<String, dynamic>?) ?? const {}),
+      user:
+          AppUser.fromJson((json['user'] as Map<String, dynamic>?) ?? const {}),
       plans: ((json['plans'] as List?) ?? const [])
           .map((e) => PlanInfo.fromJson(e as Map<String, dynamic>))
           .toList(growable: false),
       extendOptions: ((json['extend_options'] as List?) ?? const [])
           .map((e) => (e as num).toInt())
           .toList(growable: false),
-      maxActive: ((json['limits'] as Map<String, dynamic>?) ?? const {})['max_active'] is num
-          ? (((json['limits'] as Map<String, dynamic>)['max_active']) as num).toInt()
+      maxActive: ((json['limits'] as Map<String, dynamic>?) ??
+              const {})['max_active'] is num
+          ? (((json['limits'] as Map<String, dynamic>)['max_active']) as num)
+              .toInt()
           : null,
     );
   }
@@ -113,7 +117,8 @@ class TokenPair {
   final String refreshToken;
   final DateTime expiresAt;
 
-  bool get expiringSoon => DateTime.now().isAfter(expiresAt.subtract(const Duration(seconds: 60)));
+  bool get expiringSoon =>
+      DateTime.now().isAfter(expiresAt.subtract(const Duration(seconds: 60)));
 
   factory TokenPair.fromJson(Map<String, dynamic> json) {
     final seconds = (json['expires_in'] as num?)?.toInt() ?? 900;
