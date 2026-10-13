@@ -55,6 +55,15 @@ jobs:
       - name: Сборка универсального APK
         run: flutter build apk --release
 
+      - name: Переименовать APK
+        working-directory: build/app/outputs/flutter-apk
+        run: |
+          cp app-arm64-v8a-release.apk tmps-v8.apk
+          cp app-armeabi-v7a-release.apk tmps-v7.apk
+          cp app-x86_64-release.apk tmps-x64.apk
+          cp app-x86-release.apk tmps-x86.apk
+          cp app-release.apk tmps.apk
+
       - name: Контрольные суммы
         working-directory: build/app/outputs/flutter-apk
         run: |
@@ -76,10 +85,11 @@ jobs:
             echo
             echo "| Устройство | Файл |"
             echo "| --- | --- |"
-            echo "| Большинство телефонов с 2016 года | [![arm64-v8a]($B/APK-arm64--v8a-40916c?$S)]($BASE/app-arm64-v8a-release.apk) |"
-            echo "| Старые и бюджетные, 32 бита | [![armeabi-v7a]($B/APK-armeabi--v7a-40916c?$S)]($BASE/app-armeabi-v7a-release.apk) |"
-            echo "| Эмуляторы и планшеты на Intel | [![x86_64]($B/APK-x86__64-40916c?$S)]($BASE/app-x86_64-release.apk) |"
-            echo "| Не знаете какой - берите этот | [![universal]($B/APK-universal-40916c?$S)]($BASE/app-release.apk) |"
+            echo "| Большинство телефонов с 2016 года | [![arm64-v8a]($B/APK-arm64--v8a-40916c?$S)]($BASE/tmps-v8.apk) |"
+            echo "| Старые и бюджетные, 32 бита | [![armeabi-v7a]($B/APK-armeabi--v7a-40916c?$S)]($BASE/tmps-v7.apk) |"
+            echo "| Эмуляторы и планшеты на Intel | [![x86_64]($B/APK-x86__64-40916c?$S)]($BASE/tmps-x64.apk) |"
+            echo "| Старые Intel-устройства | [![x86]($B/APK-x86-40916c?$S)]($BASE/tmps-x86.apk) |"
+            echo "| Не знаете какой - берите этот | [![universal]($B/APK-universal-40916c?$S)]($BASE/tmps.apk) |"
             echo
             echo "Универсальный весит больше, потому что содержит код под все архитектуры сразу. Работает везде."
             echo

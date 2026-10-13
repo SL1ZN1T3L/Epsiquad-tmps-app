@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
@@ -127,21 +128,57 @@ class ApiClient {
   Future<http.Response> _sendOnce(Future<http.Response> Function() send) async {
     try {
       return await send();
-    } on TimeoutException {
+    } on TimeoutException catch (error, stackTrace) {
+      developer.log(
+        'Request timed out; resetting the HTTP connection',
+        name: 'tmps.api',
+        error: error,
+        stackTrace: stackTrace,
+      );
       _resetConnections();
-    } on SocketException {
+    } on SocketException catch (error, stackTrace) {
+      developer.log(
+        'Network connection failed; resetting the HTTP connection',
+        name: 'tmps.api',
+        error: error,
+        stackTrace: stackTrace,
+      );
       _resetConnections();
-    } on HttpException {
+    } on HttpException catch (error, stackTrace) {
+      developer.log(
+        'HTTP connection failed; resetting the HTTP connection',
+        name: 'tmps.api',
+        error: error,
+        stackTrace: stackTrace,
+      );
       _resetConnections();
-    } catch (_) {
+    } catch (error, stackTrace) {
+      developer.log(
+        'Unexpected network error',
+        name: 'tmps.api',
+        error: error,
+        stackTrace: stackTrace,
+      );
       throw ApiException('Нет связи с сервером. Проверьте интернет');
     }
 
     try {
       return await send();
-    } on TimeoutException {
+    } on TimeoutException catch (error, stackTrace) {
+      developer.log(
+        'Retry timed out',
+        name: 'tmps.api',
+        error: error,
+        stackTrace: stackTrace,
+      );
       throw ApiException('Сервер не ответил вовремя. Проверьте соединение');
-    } catch (_) {
+    } catch (error, stackTrace) {
+      developer.log(
+        'Retry failed because the server is unreachable',
+        name: 'tmps.api',
+        error: error,
+        stackTrace: stackTrace,
+      );
       throw ApiException('Нет связи с сервером. Проверьте интернет');
     }
   }

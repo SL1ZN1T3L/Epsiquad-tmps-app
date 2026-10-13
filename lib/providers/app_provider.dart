@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' as developer;
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -40,6 +41,7 @@ class AppProvider extends ChangeNotifier {
   String _appVersion = '1.0.0';
   bool _biometricEnabled = false;
   bool _biometricAvailable = false;
+  bool _autoBiometricEnabled = true;
   String? _notice;
   ReleaseInfo? _update;
 
@@ -48,6 +50,7 @@ class AppProvider extends ChangeNotifier {
   ServerConfig? get config => _config;
   bool get biometricEnabled => _biometricEnabled;
   bool get biometricAvailable => _biometricAvailable;
+  bool get autoBiometricEnabled => _autoBiometricEnabled;
   String get appVersion => _appVersion;
   String get deviceName => _deviceName;
   List<String> get abis => _abis;
@@ -69,6 +72,7 @@ class AppProvider extends ChangeNotifier {
 
   Future<void> bootstrap() async {
     _stage = AppStage.loading;
+    _autoBiometricEnabled = true;
     notifyListeners();
 
     await _readDeviceFacts();
@@ -174,7 +178,13 @@ class AppProvider extends ChangeNotifier {
         _stage = AppStage.signedOut;
         _notice = 'Нужно войти заново';
       } else {
-            _notice = e.message;
+        developer.log(
+          'Restoring the saved session failed',
+          name: 'tmps.auth',
+          error: e,
+        );
+        _notice = e.message;
+        _autoBiometricEnabled = false;
         _stage = (_biometricEnabled && _biometricAvailable)
             ? AppStage.locked
             : AppStage.signedOut;

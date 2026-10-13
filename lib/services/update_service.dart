@@ -42,13 +42,25 @@ class ReleaseInfo {
 
   String get version => tag.replaceFirst(RegExp(r'^v'), '');
 
-  static final _abiInName = RegExp(r'(arm64-v8a|armeabi-v7a|x86_64|x86)');
+  static final _abiInName = RegExp(r'(arm64-v8a|armeabi-v7a|x86_64|x86|tmps-v[478]|tmps-x(?:86|64))');
 
   ReleaseAsset? apkFor(List<String> abis) {
     final apks =
         assets.where((a) => a.name.toLowerCase().endsWith('.apk')).toList(growable: false);
     if (apks.isEmpty) return null;
     for (final abi in abis) {
+      final renamed = switch (abi) {
+        'arm64-v8a' => 'tmps-v8.apk',
+        'armeabi-v7a' => 'tmps-v7.apk',
+        'x86_64' => 'tmps-x64.apk',
+        'x86' => 'tmps-x86.apk',
+        _ => null,
+      };
+      if (renamed != null) {
+        for (final asset in apks) {
+          if (asset.name.toLowerCase() == renamed) return asset;
+        }
+      }
       for (final asset in apks) {
         if (asset.name.contains(abi)) return asset;
       }
@@ -141,6 +153,10 @@ class UpdateService {
     ReleaseAsset? checksum,
     void Function(double progress)? onProgress,
   }) async {
+    if (checksum == null) {
+      throw UpdateFailure('Для этой версии нет контрольной суммы, обновление отменено');
+    }
+
     final dir = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/${apk.name}');
     if (await file.exists()) {
@@ -175,15 +191,15 @@ class UpdateService {
     }
     await sink.close();
 
-    if (checksum != null) {
-      final expected = await _expected(checksum);
-      if (expected != null) {
-        final actual = (await sha256.bind(file.openRead()).first).toString().toLowerCase();
-        if (actual != expected) {
-          await _drop(file);
-          throw UpdateFailure('Контрольная сумма не совпала, файл повреждён');
-        }
-      }
+    final expected = await _expected(checksum);
+    if (expected == null) {
+      await _drop(file);
+      throw UpdateFailure('Контрольная сумма имеет неверный формат');
+    }
+    final actual = (await sha256.bind(file.openRead()).first).toString().toLowerCase();
+    if (actual != expected) {
+      await _drop(file);
+      throw UpdateFailure('Контрольная сумма не совпала, файл повреждён');
     }
 
     return file;

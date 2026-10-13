@@ -154,7 +154,9 @@ class _PinScreenState extends State<PinScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final app = context.read<AppProvider>();
-        if (app.biometricEnabled && app.biometricAvailable) _biometric();
+        if (app.autoBiometricEnabled && app.biometricEnabled && app.biometricAvailable) {
+          _biometric();
+        }
       });
     }
   }
