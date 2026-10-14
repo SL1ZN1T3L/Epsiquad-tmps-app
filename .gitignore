@@ -25,3 +25,5 @@ SETUP.md
 *.lineage
 key.properties
 *.vbs
+# Widget Preview related
+.widget_preview/
