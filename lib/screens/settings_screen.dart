@@ -40,6 +40,79 @@ Future<void> _toggleBiometric(
   _say(context, error);
 }
 
+String _autoLockLabel(int minutes) => minutes == 0
+    ? 'Выключена'
+    : 'Через $minutes ${plural(minutes, 'минуту', 'минуты', 'минут')}';
+
+String _leadLabel(int hours) {
+  switch (hours) {
+    case 0:
+      return 'Выключены';
+    case 1:
+      return 'За 1 час';
+    case 6:
+      return 'За 6 часов';
+    case 24:
+      return 'За сутки';
+    default:
+      return 'За ${fmtHours(hours)}';
+  }
+}
+
+Future<T?> _pickValue<T>(
+  BuildContext context,
+  String title,
+  List<T> options,
+  String Function(T) label, {
+  required T current,
+}) {
+  return showModalBottomSheet<T>(
+    context: context,
+    builder: (ctx) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 16),
+          Text(title,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+          const SizedBox(height: 10),
+          for (final option in options)
+            ListTile(
+              title: Text(label(option)),
+              trailing: option == current
+                  ? const TmpsIcon(Ico.check, color: TmpsColors.accent)
+                  : null,
+              onTap: () => Navigator.of(ctx).pop(option),
+            ),
+          const SizedBox(height: 12),
+        ],
+      ),
+    ),
+  );
+}
+
+Future<void> _pickAutoLock(BuildContext context, AppProvider app) async {
+  final minutes = await _pickValue<int>(
+    context,
+    'Автоблокировка',
+    const [0, 1, 5, 15, 30],
+    _autoLockLabel,
+    current: app.autoLockMinutes,
+  );
+  if (minutes != null) await app.setAutoLockMinutes(minutes);
+}
+
+Future<void> _pickLead(BuildContext context, AppProvider app) async {
+  final hours = await _pickValue<int>(
+    context,
+    'Напоминание об истечении',
+    const [0, 1, 6, 24, 72],
+    _leadLabel,
+    current: app.expiryLeadHours,
+  );
+  if (hours != null) await app.setExpiryLeadHours(hours);
+}
+
 void _say(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
@@ -228,6 +301,25 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
                   onTap: () => _changePin(context, app),
                 ),
+                ListTile(
+                  leading: const TmpsIcon(Ico.clock, color: TmpsColors.muted),
+                  title: const Text('Автоблокировка'),
+                  subtitle: Text(
+                    '${_autoLockLabel(app.autoLockMinutes)}. Блокирует приложение при бездействии и после сворачивания',
+                    style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+                  ),
+                  onTap: () => _pickAutoLock(context, app),
+                ),
+                SwitchListTile(
+                  value: app.hideRecents,
+                  onChanged: app.setHideRecents,
+                  activeThumbColor: TmpsColors.accent,
+                  title: const Text('Скрывать окно в списке недавних'),
+                  subtitle: const Text(
+                    'Содержимое не видно в переключателе приложений. На Android 12 и ниже скриншоты тоже отключатся',
+                    style: TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+                  ),
+                ),
                 SwitchListTile(
                   value: app.biometricEnabled,
                   onChanged: app.biometricAvailable
@@ -244,6 +336,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ),
                 ),
               ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          _section('Уведомления'),
+          Card(
+            child: ListTile(
+              leading: const TmpsIcon(Ico.bell, color: TmpsColors.muted),
+              title: const Text('Скоро истечёт срок хранилища'),
+              subtitle: Text(
+                '${_leadLabel(app.expiryLeadHours)}. Напомним, чтобы вы успели продлить хранилище или забрать файлы',
+                style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+              ),
+              onTap: () => _pickLead(context, app),
             ),
           ),
           const SizedBox(height: 16),

@@ -6,6 +6,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' show RequestAbortedException;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../models/storage.dart';
@@ -94,11 +95,35 @@ class _ChunkReader {
   }
 }
 
+/// Порядок файлов в списке хранилища.
+enum FileSort {
+  dateDesc('Сначала новые'),
+  dateAsc('Сначала старые'),
+  nameAsc('По имени, А-Я'),
+  nameDesc('По имени, Я-А'),
+  sizeDesc('Сначала большие'),
+  sizeAsc('Сначала маленькие'),
+  type('По типу');
+
+  const FileSort(this.label);
+
+  final String label;
+}
+
 class FileDownload {
-  FileDownload({required this.id, required this.name});
+  FileDownload({
+    required this.id,
+    required this.name,
+    required this.build,
+    required this.allowPause,
+  });
 
   final String id;
   final String name;
+
+  /// Как заново собрать адрес скачивания при повторе.
+  final Uri Function() build;
+  final bool allowPause;
 
   double progress = 0;
   String? savedPath;
@@ -106,11 +131,16 @@ class FileDownload {
   String? hint;
   DownloadHandle? handle;
   bool canPause = true;
+
+  /// null - пока неизвестно, true/false - ответ сервера (Accept-Ranges).
+  bool? pauseSupported;
   bool paused = false;
   bool canceled = false;
 
+  bool get pauseEnabled => canPause && pauseSupported != false;
   bool get done => savedPath != null;
   bool get running => savedPath == null && error == null && !canceled;
+  bool get canRetry => !running && !done;
 }
 
 class UploadTask {
@@ -152,7 +182,9 @@ class StorageProvider extends ChangeNotifier {
     required StorageItem initial,
   })  : _storages = storages,
         _node = node,
-        _item = initial;
+        _item = initial {
+    unawaited(_loadSort());
+  }
 
   final StorageService _storages;
   final NodeService _node;
@@ -168,6 +200,11 @@ class StorageProvider extends ChangeNotifier {
   final List<FileDownload> _downloads = [];
   final DownloadService _files = DownloadService();
   bool _pumping = false;
+
+  static const _sortKey = 'tmps.file_sort';
+  FileSort _sort = FileSort.dateDesc;
+  String _query = '';
+  final Set<String> _selected = {};
 
   WebSocketChannel? _socket;
   StreamSubscription? _events;
@@ -185,6 +222,121 @@ class StorageProvider extends ChangeNotifier {
   List<UploadTask> get uploads => List.unmodifiable(_uploads);
   List<FileDownload> get downloads => List.unmodifiable(_downloads);
   List<StorageFile> get files => _state?.files ?? const [];
+
+  // ---- Поиск и сортировка ----
+
+  FileSort get sort => _sort;
+  String get query => _query;
+  bool get filtering => _query.trim().isNotEmpty;
+
+  /// Файлы с учётом поиска и выбранной сортировки.
+  List<StorageFile> get visibleFiles {
+    final needle = _query.trim().toLowerCase();
+    final list = [
+      for (final file in files)
+        if (needle.isEmpty || file.name.toLowerCase().contains(needle)) file,
+    ];
+    list.sort(_compare);
+    return list;
+  }
+
+  int _compare(StorageFile a, StorageFile b) {
+    int byName() => a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    int then(int primary) => primary != 0 ? primary : byName();
+    switch (_sort) {
+      case FileSort.dateDesc:
+        return then(b.modifiedAt.compareTo(a.modifiedAt));
+      case FileSort.dateAsc:
+        return then(a.modifiedAt.compareTo(b.modifiedAt));
+      case FileSort.nameAsc:
+        return byName();
+      case FileSort.nameDesc:
+        return -byName();
+      case FileSort.sizeDesc:
+        return then(b.size.compareTo(a.size));
+      case FileSort.sizeAsc:
+        return then(a.size.compareTo(b.size));
+      case FileSort.type:
+        return then(a.kind.compareTo(b.kind));
+    }
+  }
+
+  Future<void> _loadSort() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final index = prefs.getInt(_sortKey);
+      if (index != null && index >= 0 && index < FileSort.values.length) {
+        _sort = FileSort.values[index];
+        _ping();
+      }
+    } catch (_) {}
+  }
+
+  Future<void> setSort(FileSort value) async {
+    _sort = value;
+    _ping();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_sortKey, value.index);
+    } catch (_) {}
+  }
+
+  void setQuery(String value) {
+    if (value == _query) return;
+    _query = value;
+    // Выбранные файлы могли скрыться из списка, поэтому выбор сбрасываем.
+    _selected.clear();
+    _ping();
+  }
+
+  // ---- Выбор нескольких файлов ----
+
+  bool get selecting => _selected.isNotEmpty;
+  int get selectedCount => _selected.length;
+  bool isSelected(String name) => _selected.contains(name);
+
+  List<StorageFile> get selectedFiles =>
+      [for (final file in visibleFiles) if (_selected.contains(file.name)) file];
+
+  void toggleSelected(String name) {
+    if (!_selected.remove(name)) _selected.add(name);
+    _ping();
+  }
+
+  void selectAllVisible() {
+    _selected.addAll(visibleFiles.map((f) => f.name));
+    _ping();
+  }
+
+  void clearSelection() {
+    if (_selected.isEmpty) return;
+    _selected.clear();
+    _ping();
+  }
+
+  void _pruneSelection() {
+    if (_selected.isEmpty) return;
+    final names = files.map((f) => f.name).toSet();
+    _selected.removeWhere((name) => !names.contains(name));
+  }
+
+  void downloadSelected() {
+    final picked = selectedFiles;
+    clearSelection();
+    for (final file in picked) {
+      unawaited(download(file));
+    }
+  }
+
+  Future<void> deleteSelected() async {
+    final names = _selected.toList();
+    await deleteFiles(names);
+    _selected.removeAll(names);
+    _ping();
+  }
+
+  String selectedLinks() =>
+      selectedFiles.map((f) => fileUri(f).toString()).join('\n');
 
   bool get hasActiveUploads => _uploads.any((t) => t.active);
 
@@ -224,6 +376,7 @@ class StorageProvider extends ChangeNotifier {
     try {
       _item = await _storages.get(_item.code);
       _state = await _withGrant((grant) => _node.state(_item.code, grant));
+      _pruneSelection();
       _error = null;
     } on ApiException catch (e) {
       _error = e.message;
@@ -241,6 +394,13 @@ class StorageProvider extends ChangeNotifier {
   Uri fileUri(StorageFile file, {bool download = true}) =>
       _node.fileUri(_item.code, file.name, download: download);
 
+  /// Заголовки владельца для предпросмотра файла по ссылке.
+  /// [refresh] запрашивает новый ключ, если прежний перестал подходить.
+  Future<Map<String, String>> previewHeaders({bool refresh = false}) async {
+    final grant = await _ownerGrant(force: refresh);
+    return _node.ownerHeaders(grant);
+  }
+
   Future<void> download(StorageFile file) {
     return _startDownload(file.name, () => _node.fileUri(_item.code, file.name));
   }
@@ -253,21 +413,42 @@ class StorageProvider extends ChangeNotifier {
     );
   }
 
-  Future<void> _startDownload(String name, Uri Function() build, {bool allowPause = true}) async {
+  Future<void> _startDownload(String name, Uri Function() build, {bool allowPause = true}) {
     final job = FileDownload(
       id: '${DateTime.now().microsecondsSinceEpoch}-${_downloads.length}',
       name: name,
+      build: build,
+      allowPause: allowPause,
     )..canPause = allowPause;
     _downloads.add(job);
     _ping();
+    return _runDownload(job);
+  }
+
+  /// Запускает скачивание заново для неудавшегося или отменённого файла.
+  Future<void> retryDownload(FileDownload job) {
+    if (!job.canRetry) return Future.value();
+    job
+      ..error = null
+      ..canceled = false
+      ..paused = false
+      ..hint = null
+      ..handle = null
+      ..pauseSupported = null
+      ..progress = 0;
+    _ping();
+    return _runDownload(job);
+  }
+
+  Future<void> _runDownload(FileDownload job) async {
     try {
       final grant = await _ownerGrant();
       if (job.canceled) return;
       job.savedPath = await _files.save(
-        url: build(),
+        url: job.build(),
         headers: _node.ownerHeaders(grant),
-        filename: name,
-        allowPause: allowPause,
+        filename: job.name,
+        allowPause: job.allowPause,
         onStart: (handle) {
           job.handle = handle;
           if (job.canceled) unawaited(_files.cancel(handle));
@@ -275,6 +456,10 @@ class StorageProvider extends ChangeNotifier {
         onPaused: (paused) {
           job.paused = paused;
           if (paused) job.hint = null;
+          _ping();
+        },
+        onPauseSupport: (supported) {
+          job.pauseSupported = supported;
           _ping();
         },
         onProgress: (value) {
@@ -296,9 +481,15 @@ class StorageProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> openDownload(FileDownload job) async {
+    final path = job.savedPath;
+    if (path == null) return;
+    await DownloadService.openSaved(path);
+  }
+
   Future<void> pauseDownload(FileDownload job) async {
     final handle = job.handle;
-    if (handle == null || !job.running || job.paused || !job.canPause) return;
+    if (handle == null || !job.running || job.paused || !job.pauseEnabled) return;
     final ok = await _files.pause(handle);
     job.hint = ok ? null : 'Для этого файла пауза недоступна';
     if (ok) job.paused = true;
@@ -325,7 +516,7 @@ class StorageProvider extends ChangeNotifier {
   }
 
   Future<void> pauseAllDownloads() async {
-    await Future.wait(_downloads.where((j) => j.running && j.canPause && !j.paused).map(pauseDownload));
+    await Future.wait(_downloads.where((j) => j.running && j.pauseEnabled && !j.paused).map(pauseDownload));
   }
 
   Future<void> resumeAllDownloads() async {
@@ -444,6 +635,26 @@ class StorageProvider extends ChangeNotifier {
     }
   }
 
+  /// Повторяет запрос при обрыве связи и ошибках сервера: до трёх раз с
+  /// нарастающей паузой. Если отправку поставили на паузу или отменили,
+  /// ожидание прерывается.
+  Future<T> _transient<T>(UploadTask task, Future<T> Function() action) async {
+    var attempt = 0;
+    while (true) {
+      try {
+        return await action();
+      } on ApiException catch (e) {
+        final transient = e.status == 0 || e.status >= 500;
+        if (!transient || attempt >= 3 || _disposed) rethrow;
+        attempt++;
+        await Future<void>.delayed(Duration(seconds: attempt * 2));
+        if (task.status != UploadStatus.uploading || _disposed) {
+          throw RequestAbortedException();
+        }
+      }
+    }
+  }
+
   Future<void> _runTask(UploadTask task) async {
     task.armAbort();
     task.status = UploadStatus.uploading;
@@ -481,14 +692,17 @@ class StorageProvider extends ChangeNotifier {
 
         final uid = session.uid;
         try {
-          await _withGrant(
-            (grant) => _node.putChunk(
-              _item.code,
-              grant,
-              uid,
-              index,
-              bytes,
-              abort: task.abortSignal,
+          await _transient(
+            task,
+            () => _withGrant(
+              (grant) => _node.putChunk(
+                _item.code,
+                grant,
+                uid,
+                index,
+                bytes,
+                abort: task.abortSignal,
+              ),
             ),
           );
         } on RequestAbortedException {
@@ -568,6 +782,7 @@ class StorageProvider extends ChangeNotifier {
         return;
       case 'hello':
         _state = StorageState.fromJson(event);
+        _pruneSelection();
         _error = null;
         _ping();
         return;

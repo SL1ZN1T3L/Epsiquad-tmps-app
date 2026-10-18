@@ -1,13 +1,20 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 
+import '../format.dart';
 import '../icons.dart';
+import '../messenger.dart';
 import '../models/config.dart';
 import '../models/storage.dart';
 import '../providers/app_provider.dart';
+import '../providers/storage_provider.dart';
 import '../providers/storages_provider.dart';
 import '../services/api_client.dart';
+import '../services/share_inbox.dart';
 import '../theme.dart';
 import '../widgets/brand.dart';
 import '../widgets/storage_card.dart';
@@ -24,7 +31,10 @@ class StoragesScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.read<AppProvider>();
     return ChangeNotifierProvider(
-      create: (_) => StoragesProvider(app.storages)..load(),
+      create: (_) => StoragesProvider(
+        app.storages,
+        onChanged: (items) => unawaited(app.syncReminders(items)),
+      )..load(),
       child: const _StoragesView(),
     );
   }
@@ -79,7 +89,8 @@ class _StoragesView extends StatelessWidget {
     final admin = app.user?.isAdmin ?? false;
     final canCreate = admin || items.length < limit;
 
-    return PopScope(
+    return _ShareGate(
+      child: PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) {
         if (!didPop) _confirmExit(context);
@@ -133,6 +144,7 @@ class _StoragesView extends StatelessWidget {
           child: _body(context, app, provider, items, limit, admin),
         ),
       ),
+    ),
     );
   }
 
@@ -284,6 +296,120 @@ class _StoragesView extends StatelessWidget {
               child: const Text('Обновить'),
             ),
         ],
+      ),
+    );
+  }
+}
+
+/// Принимает файлы, присланные из других приложений через «Поделиться»,
+/// спрашивает, в какое хранилище их загрузить, и открывает его с отправкой.
+class _ShareGate extends StatefulWidget {
+  const _ShareGate({required this.child});
+
+  final Widget child;
+
+  @override
+  State<_ShareGate> createState() => _ShareGateState();
+}
+
+class _ShareGateState extends State<_ShareGate> {
+  bool _busy = false;
+
+  Future<void> _handle() async {
+    if (!mounted) {
+      _busy = false;
+      return;
+    }
+    final app = context.read<AppProvider>();
+    final provider = context.read<StoragesProvider>();
+    final files = app.takeShare();
+    if (files.isEmpty) {
+      _busy = false;
+      return;
+    }
+
+    // Список хранилищ мог ещё не успеть загрузиться.
+    for (var i = 0; i < 40 && provider.items.isEmpty && provider.loading; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+      if (!mounted) return;
+    }
+    if (provider.items.isEmpty) {
+      _busy = false;
+      showAppToast('Нет хранилищ, куда можно загрузить файлы. Создайте хранилище и повторите');
+      return;
+    }
+
+    final item = await showModalBottomSheet<StorageItem>(
+      context: context,
+      builder: (ctx) => _ShareTargetSheet(files: files, items: provider.items),
+    );
+    _busy = false;
+    if (item == null || !mounted) return;
+
+    final sources = [
+      for (final file in files)
+        UploadSource(
+          name: file.name,
+          size: file.size,
+          path: file.path,
+          openStream: () => File(file.path).openRead(),
+        ),
+    ];
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => StorageScreen(item: item, storages: provider, uploads: sources),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppProvider>();
+    if (app.pendingShare.isNotEmpty && !app.autoLocked && !_busy) {
+      _busy = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _handle());
+    }
+    return widget.child;
+  }
+}
+
+class _ShareTargetSheet extends StatelessWidget {
+  const _ShareTargetSheet({required this.files, required this.items});
+
+  final List<SharedFile> files;
+  final List<StorageItem> items;
+
+  @override
+  Widget build(BuildContext context) {
+    final total = files.fold<int>(0, (sum, f) => sum + f.size);
+    final count = files.length;
+    return SafeArea(
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 16),
+            Text(
+              'Загрузить $count ${plural(count, 'файл', 'файла', 'файлов')}',
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '${fmtSize(total)} · выберите хранилище',
+              style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+            ),
+            const SizedBox(height: 10),
+            for (final item in items)
+              ListTile(
+                leading: const TmpsIcon(Ico.box, color: TmpsColors.accent),
+                title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  '${item.code} · свободно ${fmtSize(item.freeBytes)}',
+                  style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+                ),
+                onTap: () => Navigator.of(context).pop(item),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
       ),
     );
   }

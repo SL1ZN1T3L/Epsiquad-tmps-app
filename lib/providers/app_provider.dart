@@ -4,12 +4,18 @@ import 'dart:developer' as developer;
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/config.dart';
 import '../models/session.dart';
+import '../models/storage.dart';
 import '../services/api_client.dart';
 import '../services/auth_service.dart';
+import '../services/download_service.dart';
+import '../services/reminder_service.dart';
 import '../services/secure_store.dart';
+import '../services/share_inbox.dart';
+import '../services/system_service.dart';
 import '../services/storage_service.dart';
 import '../services/update_service.dart';
 
@@ -47,6 +53,19 @@ class AppProvider extends ChangeNotifier {
   String? _notice;
   ReleaseInfo? _update;
 
+  // Настройки безопасности и напоминаний
+  static const _kAutoLock = 'tmps_auto_lock_minutes';
+  static const _kExpiryLead = 'tmps_expiry_lead_hours';
+  int _autoLockMinutes = 5;
+  bool _hideRecents = true;
+  int _expiryLeadHours = 24;
+  bool _autoLocked = false;
+  DateTime _lastActive = DateTime.now();
+  int _lockHolds = 0;
+  bool _shareStarted = false;
+  List<SharedFile> _pendingShare = const [];
+  List<StorageItem> _knownStorages = const [];
+
   AppStage get stage => _stage;
   AppUser? get user => _user;
   ServerConfig? get config => _config;
@@ -61,6 +80,11 @@ class AppProvider extends ChangeNotifier {
   ReleaseInfo? get update => _update;
   bool get signedIn => _tokens != null && _user != null;
   bool get devMode => _devMode;
+  int get autoLockMinutes => _autoLockMinutes;
+  bool get hideRecents => _hideRecents;
+  int get expiryLeadHours => _expiryLeadHours;
+  bool get autoLocked => _autoLocked;
+  List<SharedFile> get pendingShare => _pendingShare;
 
   bool get outdated {
     final cfg = _config;
@@ -73,12 +97,144 @@ class AppProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  // ---- Настройки ----
+
+  Future<void> _loadSettings() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _autoLockMinutes = prefs.getInt(_kAutoLock) ?? 5;
+      _hideRecents = prefs.getBool(SystemService.hideRecentsKey) ?? true;
+      _expiryLeadHours = prefs.getInt(_kExpiryLead) ?? 24;
+    } catch (_) {}
+    unawaited(SystemService.setHideRecents(_hideRecents));
+  }
+
+  Future<void> setAutoLockMinutes(int minutes) async {
+    _autoLockMinutes = minutes;
+    _lastActive = DateTime.now();
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_kAutoLock, minutes);
+    } catch (_) {}
+  }
+
+  Future<void> setHideRecents(bool value) async {
+    _hideRecents = value;
+    notifyListeners();
+    await SystemService.setHideRecents(value);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(SystemService.hideRecentsKey, value);
+    } catch (_) {}
+  }
+
+  Future<void> setExpiryLeadHours(int hours) async {
+    _expiryLeadHours = hours;
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_kExpiryLead, hours);
+    } catch (_) {}
+    if (hours > 0) await DownloadService.requestNotificationPermission();
+    await syncReminders(_knownStorages);
+  }
+
+  /// Вызывается при каждом обновлении списка хранилищ.
+  Future<void> syncReminders(List<StorageItem> items) async {
+    _knownStorages = items;
+    await ReminderService.sync(items, leadHours: _expiryLeadHours);
+  }
+
+  // ---- Автоблокировка по таймеру ----
+
+  /// Любое касание экрана сбрасывает отсчёт.
+  void touch() => _lastActive = DateTime.now();
+
+  /// Пока открыт плеер, блокировка по таймеру не срабатывает.
+  void holdLock() => _lockHolds++;
+
+  void releaseLock() {
+    if (_lockHolds > 0) _lockHolds--;
+    _lastActive = DateTime.now();
+  }
+
+  void checkAutoLock() {
+    if (_stage != AppStage.ready || _autoLocked) return;
+    if (_autoLockMinutes <= 0 || _lockHolds > 0) return;
+    if (DateTime.now().difference(_lastActive) >= Duration(minutes: _autoLockMinutes)) {
+      lockNow();
+    }
+  }
+
+  /// Закрывает приложение пин-кодом, не разрушая открытые экраны:
+  /// загрузки и скачивания продолжаются.
+  void lockNow() {
+    if (_stage != AppStage.ready || _autoLocked) return;
+    _store.lock();
+    _autoLocked = true;
+    _autoBiometricEnabled = true;
+    notifyListeners();
+  }
+
+  Future<String?> relockWithPin(String pin) async {
+    try {
+      if (!await _store.openWithPin(pin)) {
+        final left = SecureStore.maxAttempts - await _store.failedAttempts();
+        return left <= 3
+            ? 'Неверный пин-код, осталось попыток: $left'
+            : 'Неверный пин-код';
+      }
+    } on PinLocked {
+      _afterWipe();
+      return 'Слишком много попыток. Данные входа стёрты, войдите заново';
+    }
+    _finishRelock();
+    return null;
+  }
+
+  Future<String?> relockWithBiometrics() async {
+    try {
+      if (!await _store.openWithBiometrics()) return null;
+    } on PinLocked {
+      _afterWipe();
+      return 'Слишком много попыток. Данные входа стёрты, войдите заново';
+    }
+    _finishRelock();
+    return null;
+  }
+
+  void _finishRelock() {
+    _autoLocked = false;
+    _lastActive = DateTime.now();
+    notifyListeners();
+  }
+
+  // ---- Файлы из «Поделиться» ----
+
+  void _onShared(List<SharedFile> files) {
+    if (files.isEmpty) return;
+    _pendingShare = [..._pendingShare, ...files];
+    notifyListeners();
+  }
+
+  List<SharedFile> takeShare() {
+    final taken = _pendingShare;
+    _pendingShare = const [];
+    return taken;
+  }
+
   Future<void> bootstrap() async {
     _stage = AppStage.loading;
     _autoBiometricEnabled = true;
     notifyListeners();
 
     await _readDeviceFacts();
+    await _loadSettings();
+    if (!_shareStarted) {
+      _shareStarted = true;
+      unawaited(ShareInbox.start(_onShared));
+    }
     _deviceId = await _store.deviceId();
     _biometricEnabled = await _store.biometricEnabled();
     _biometricAvailable = await _store.biometricAvailable();
@@ -137,6 +293,7 @@ class AppProvider extends ChangeNotifier {
   }
 
   void _afterWipe() {
+    _autoLocked = false;
     _biometricEnabled = false;
     _tokens = null;
     _user = null;
@@ -311,6 +468,10 @@ class AppProvider extends ChangeNotifier {
       if (_tokens != null) await auth.logout();
     } catch (_) {}
     await _store.wipe();
+    _autoLocked = false;
+    _pendingShare = const [];
+    _knownStorages = const [];
+    unawaited(ReminderService.cancelAll());
     _biometricEnabled = false;
     _tokens = null;
     _user = null;

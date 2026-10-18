@@ -5,9 +5,13 @@ import '../services/api_client.dart';
 import '../services/storage_service.dart';
 
 class StoragesProvider extends ChangeNotifier {
-  StoragesProvider(this._service);
+  StoragesProvider(this._service, {this.onChanged});
 
   final StorageService _service;
+
+  /// Вызывается после каждого изменения списка: по нему обновляются
+  /// напоминания об истечении срока.
+  final void Function(List<StorageItem> items)? onChanged;
 
   List<StorageItem> _items = const [];
   bool _loading = false;
@@ -26,6 +30,7 @@ class StoragesProvider extends ChangeNotifier {
     try {
       _items = await _service.list();
       _error = null;
+      onChanged?.call(_items);
     } on ApiException catch (e) {
       _error = e.message;
     } finally {
@@ -44,11 +49,13 @@ class StoragesProvider extends ChangeNotifier {
       _items = copy;
     }
     notifyListeners();
+    onChanged?.call(_items);
   }
 
   void removeLocal(String code) {
     _items = _items.where((s) => s.code != code).toList(growable: false);
     notifyListeners();
+    onChanged?.call(_items);
   }
 
   Future<StorageItem> create({required String plan, int? ttlHours, String? title}) async {

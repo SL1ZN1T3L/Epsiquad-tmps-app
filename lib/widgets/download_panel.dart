@@ -43,7 +43,7 @@ class DownloadPanel extends StatelessWidget {
     final running = jobs.where((d) => d.running).length;
     final canceled = jobs.where((d) => d.canceled).length;
     final paused = jobs.any((d) => d.running && d.paused);
-    final canPause = jobs.any((d) => d.running && d.canPause);
+    final pausable = jobs.any((d) => d.running && d.pauseEnabled);
 
     final title = running > 0
         ? 'Скачивание'
@@ -75,20 +75,21 @@ class DownloadPanel extends StatelessWidget {
             ),
             if (running > 0) ...[
               const SizedBox(height: 12),
+              // Обе кнопки видны всегда, пока идёт скачивание. Если паузу
+              // нельзя применить (архив или сервер без докачки), кнопка
+              // неактивна, а причина написана в строке файла ниже.
               Row(
                 children: [
-                  if (canPause || paused) ...[
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        icon: TmpsIcon(paused ? Ico.play : Ico.pause, size: 18),
-                        label: Text(paused ? 'Продолжить' : 'Пауза'),
-                        onPressed: paused
-                            ? provider.resumeAllDownloads
-                            : provider.pauseAllDownloads,
-                      ),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: TmpsIcon(paused ? Ico.play : Ico.pause, size: 18),
+                      label: Text(paused ? 'Продолжить' : 'Пауза'),
+                      onPressed: paused
+                          ? provider.resumeAllDownloads
+                          : (pausable ? provider.pauseAllDownloads : null),
                     ),
-                    const SizedBox(width: 8),
-                  ],
+                  ),
+                  const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton.icon(
                       style: OutlinedButton.styleFrom(
@@ -121,8 +122,13 @@ class _DownloadRow extends StatelessWidget {
     if (job.error != null) return job.error!;
     if (job.canceled) return 'отменено';
     if (job.done) return 'Сохранено в «Загрузки»';
-    if (job.paused) return 'на паузе · ${(job.progress * 100).round()} %';
-    return '${(job.progress * 100).round()} %';
+    final percent = '${(job.progress * 100).round()} %';
+    if (job.paused) return 'на паузе · $percent';
+    if (!job.canPause) return '$percent · архив нельзя ставить на паузу';
+    if (job.pauseSupported == false) {
+      return '$percent · сервер не поддерживает паузу для этого файла';
+    }
+    return percent;
   }
 
   Color get _color {
@@ -181,17 +187,15 @@ class _DownloadRow extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (job.running && job.canPause && !job.paused)
+                if (job.running)
                   IconButton(
-                    icon: const TmpsIcon(Ico.pause, size: 22),
-                    tooltip: 'Пауза',
-                    onPressed: () => provider.pauseDownload(job),
-                  ),
-                if (job.running && job.paused)
-                  IconButton(
-                    icon: const TmpsIcon(Ico.play, size: 22),
-                    tooltip: 'Продолжить',
-                    onPressed: () => provider.resumeDownload(job),
+                    icon: TmpsIcon(job.paused ? Ico.play : Ico.pause, size: 22),
+                    tooltip: job.paused ? 'Продолжить' : 'Пауза',
+                    onPressed: job.paused
+                        ? () => provider.resumeDownload(job)
+                        : (job.pauseEnabled
+                            ? () => provider.pauseDownload(job)
+                            : null),
                   ),
                 if (job.running)
                   IconButton(
@@ -199,12 +203,25 @@ class _DownloadRow extends StatelessWidget {
                     tooltip: 'Отменить',
                     onPressed: () => provider.cancelDownload(job),
                   )
-                else
+                else ...[
+                  if (job.done)
+                    IconButton(
+                      icon: const TmpsIcon(Ico.external, size: 21),
+                      tooltip: 'Открыть',
+                      onPressed: () => provider.openDownload(job),
+                    ),
+                  if (job.canRetry)
+                    IconButton(
+                      icon: const TmpsIcon(Ico.refresh, size: 21),
+                      tooltip: 'Повторить',
+                      onPressed: () => provider.retryDownload(job),
+                    ),
                   IconButton(
                     icon: const TmpsIcon(Ico.x, size: 22),
                     tooltip: 'Убрать из списка',
                     onPressed: () => provider.forgetDownload(job),
                   ),
+                ],
               ],
             ),
             const SizedBox(height: 8),

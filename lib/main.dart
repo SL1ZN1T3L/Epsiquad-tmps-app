@@ -3,16 +3,22 @@ import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 
+import 'messenger.dart';
 import 'providers/app_provider.dart';
 import 'screens/pin_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/storages_screen.dart';
+import 'services/download_service.dart';
 import 'theme.dart';
+import 'widgets/app_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('ru');
+  // Обработчик нажатия на уведомление о скачивании нужен с самого запуска:
+  // по нему Android может поднять закрытое приложение.
+  DownloadService.init();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
@@ -32,6 +38,9 @@ class TmpsApp extends StatelessWidget {
       child: MaterialApp(
         title: 'Temp Storage',
         debugShowCheckedModeBanner: false,
+        scaffoldMessengerKey: messengerKey,
+        navigatorKey: navigatorKey,
+        builder: (context, child) => AppShell(child: child ?? const SizedBox.shrink()),
         theme: buildTheme(),
         home: const _Root(),
       ),

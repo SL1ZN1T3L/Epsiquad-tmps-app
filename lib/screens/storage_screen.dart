@@ -4,12 +4,14 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../format.dart';
 import '../icons.dart';
 import '../models/storage.dart';
+import '../models/storage_file.dart';
 import '../providers/app_provider.dart';
 import '../providers/storage_provider.dart';
 import '../providers/storages_provider.dart';
@@ -21,24 +23,37 @@ import '../widgets/brand.dart';
 import '../widgets/download_panel.dart';
 import '../widgets/file_tile.dart';
 import '../widgets/upload_panel.dart';
+import 'file_preview_screen.dart';
 
 class StorageScreen extends StatelessWidget {
-  const StorageScreen({super.key, required this.item, required this.storages});
+  const StorageScreen({
+    super.key,
+    required this.item,
+    required this.storages,
+    this.uploads = const [],
+  });
 
   final StorageItem item;
   final StoragesProvider storages;
+
+  /// Файлы, которые нужно сразу отправить (например, из «Поделиться»).
+  final List<UploadSource> uploads;
 
   @override
   Widget build(BuildContext context) {
     final app = context.read<AppProvider>();
     return ChangeNotifierProvider(
-      create: (_) => StorageProvider(
-        storages: app.storages,
-        node: NodeService(),
-        initial: item,
-      )
-        ..load()
-        ..connect(),
+      create: (_) {
+        final provider = StorageProvider(
+          storages: app.storages,
+          node: NodeService(),
+          initial: item,
+        )
+          ..load()
+          ..connect();
+        if (uploads.isNotEmpty) provider.enqueue(uploads);
+        return provider;
+      },
       child: _StorageView(storages: storages),
     );
   }
@@ -96,6 +111,21 @@ class _StorageView extends StatelessWidget {
     provider.enqueue(sources);
   }
 
+  void _openPreview(
+      BuildContext context, StorageProvider provider, StorageFile file) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) {
+        final files = provider.visibleFiles;
+        final index = files.indexWhere((f) => f.name == file.name);
+        return FilePreviewScreen(
+          provider: provider,
+          files: files,
+          initialIndex: index < 0 ? 0 : index,
+        );
+      },
+    ));
+  }
+
   Future<void> _run(BuildContext context, Future<void> Function() action,
       String success) async {
     try {
@@ -112,12 +142,20 @@ class _StorageView extends StatelessWidget {
     final item = provider.item;
     final state = provider.state;
     final canWrite = state?.canWrite ?? true;
+    final visible = provider.visibleFiles;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
-      ),
-      floatingActionButton: canWrite
+    return PopScope(
+      canPop: !provider.selecting,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) provider.clearSelection();
+      },
+      child: Scaffold(
+      appBar: provider.selecting
+          ? _selectionBar(context, provider, canWrite)
+          : AppBar(
+              title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
+            ),
+      floatingActionButton: canWrite && !provider.selecting
           ? FloatingActionButton.extended(
               onPressed: () => _pickFiles(context, provider),
               backgroundColor: TmpsColors.accent,
@@ -145,7 +183,7 @@ class _StorageView extends StatelessWidget {
               _errorBox(provider.error!),
               const SizedBox(height: 12),
             ],
-            _filesHeader(provider),
+            _filesHeader(provider, visible.length),
             const SizedBox(height: 10),
             if (provider.loading && state == null)
               const Padding(
@@ -162,22 +200,147 @@ class _StorageView extends StatelessWidget {
                   subtitle: 'Нажмите «Загрузить» и выберите что отправить.',
                 ),
               )
-            else
-              for (final file in provider.files)
-                FileTile(
-                  file: file,
-                  stats: state?.stats[file.name],
-                  showStats: state?.isOwner ?? false,
-                  canDelete: canWrite,
-                  onShare: () => SharePlus.instance.share(
-                    ShareParams(text: provider.fileUri(file).toString()),
+            else ...[
+              _FilesToolbar(provider: provider),
+              const SizedBox(height: 10),
+              if (visible.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.only(top: 24),
+                  child: EmptyState(
+                    icon: Ico.search,
+                    title: 'Ничего не найдено',
+                    subtitle: 'Измените запрос или очистите поиск.',
                   ),
-                  onDownload: () => unawaited(provider.download(file)),
-                  onDelete: () =>
-                      _confirmDeleteFile(context, provider, file.name),
-                ),
+                )
+              else
+                for (final file in visible)
+                  FileTile(
+                    file: file,
+                    stats: state?.stats[file.name],
+                    showStats: state?.isOwner ?? false,
+                    canDelete: canWrite,
+                    selecting: provider.selecting,
+                    selected: provider.isSelected(file.name),
+                    onOpen: () => _openPreview(context, provider, file),
+                    onLongPress: () => provider.toggleSelected(file.name),
+                    onToggle: () => provider.toggleSelected(file.name),
+                    onShare: () => SharePlus.instance.share(
+                      ShareParams(text: provider.fileUri(file).toString()),
+                    ),
+                    onDownload: () => unawaited(provider.download(file)),
+                    onDelete: () =>
+                        _confirmDeleteFile(context, provider, file.name),
+                  ),
+            ],
           ],
         ),
+      ),
+    ),
+    );
+  }
+
+  PreferredSizeWidget _selectionBar(
+      BuildContext context, StorageProvider provider, bool canWrite) {
+    return AppBar(
+      leading: IconButton(
+        icon: const TmpsIcon(Ico.x),
+        tooltip: 'Отменить выбор',
+        onPressed: provider.clearSelection,
+      ),
+      title: Text('Выбрано: ${provider.selectedCount}'),
+      actions: [
+        IconButton(
+          icon: const TmpsIcon(Ico.checkAll, size: 21),
+          tooltip: 'Выбрать все',
+          onPressed: provider.selectAllVisible,
+        ),
+        IconButton(
+          icon: const TmpsIcon(Ico.download, size: 21),
+          tooltip: 'Скачать',
+          onPressed: () {
+            final count = provider.selectedCount;
+            provider.downloadSelected();
+            _toast(context,
+                'Скачивание началось: $count ${plural(count, 'файл', 'файла', 'файлов')}');
+          },
+        ),
+        IconButton(
+          icon: const TmpsIcon(Ico.share, size: 21),
+          tooltip: 'Поделиться ссылками',
+          onPressed: () => SharePlus.instance
+              .share(ShareParams(text: provider.selectedLinks())),
+        ),
+        if (canWrite)
+          IconButton(
+            icon: const TmpsIcon(Ico.trash, size: 21, color: TmpsColors.danger),
+            tooltip: 'Удалить',
+            onPressed: () => _confirmDeleteSelected(context, provider),
+          ),
+        const SizedBox(width: 4),
+      ],
+    );
+  }
+
+  Future<void> _confirmDeleteSelected(
+      BuildContext context, StorageProvider provider) async {
+    final count = provider.selectedCount;
+    final ok = await _confirm(context,
+        title: 'Удалить $count ${plural(count, 'файл', 'файла', 'файлов')}?',
+        text: 'Файлы исчезнут у всех, у кого есть ссылка.',
+        danger: true);
+    if (!ok || !context.mounted) return;
+    await _run(context, provider.deleteSelected, 'Файлы удалены');
+  }
+
+  Future<void> _showQr(BuildContext context, StorageItem item) {
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(item.displayTitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: QrImageView(
+                data: item.url,
+                size: 220,
+                backgroundColor: Colors.white,
+              ),
+            ),
+            const SizedBox(height: 14),
+            Text(
+              item.url.replaceFirst(RegExp(r'^https?://'), ''),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Наведите камеру телефона, чтобы открыть хранилище',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+            ),
+          ],
+        ),
+        actions: [
+          DialogActions(children: [
+            FilledButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                SharePlus.instance.share(ShareParams(text: item.url));
+              },
+              child: const Text('Поделиться ссылкой'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Закрыть'),
+            ),
+          ]),
+        ],
       ),
     );
   }
@@ -238,6 +401,12 @@ class _StorageView extends StatelessWidget {
                       style: const TextStyle(
                           fontFamily: 'monospace', fontSize: 13.5),
                     ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: const TmpsIcon(Ico.qr, size: 19),
+                    tooltip: 'QR-код',
+                    onPressed: () => _showQr(context, item),
                   ),
                   IconButton(
                     visualDensity: VisualDensity.compact,
@@ -367,14 +536,17 @@ class _StorageView extends StatelessWidget {
     );
   }
 
-  Widget _filesHeader(StorageProvider provider) {
+  Widget _filesHeader(StorageProvider provider, int shown) {
     final count = provider.files.length;
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
         const Text('Файлы',
             style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
-        Text('$count ${plural(count, 'файл', 'файла', 'файлов')}',
+        Text(
+            provider.filtering
+                ? '$shown из $count'
+                : '$count ${plural(count, 'файл', 'файла', 'файлов')}',
             style: const TextStyle(color: TmpsColors.muted, fontSize: 13)),
       ],
     );
@@ -496,6 +668,103 @@ class _StorageView extends StatelessWidget {
         }
         break;
     }
+  }
+}
+
+/// Поиск по имени и выбор сортировки.
+class _FilesToolbar extends StatefulWidget {
+  const _FilesToolbar({required this.provider});
+
+  final StorageProvider provider;
+
+  @override
+  State<_FilesToolbar> createState() => _FilesToolbarState();
+}
+
+class _FilesToolbarState extends State<_FilesToolbar> {
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.text = widget.provider.query;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickSort() async {
+    final provider = widget.provider;
+    final picked = await showModalBottomSheet<FileSort>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 16),
+            const Text('Сортировка',
+                style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 10),
+            for (final option in FileSort.values)
+              ListTile(
+                title: Text(option.label),
+                trailing: option == provider.sort
+                    ? const TmpsIcon(Ico.check, color: TmpsColors.accent)
+                    : null,
+                onTap: () => Navigator.of(ctx).pop(option),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) await provider.setSort(picked);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _controller,
+            textInputAction: TextInputAction.search,
+            onChanged: (value) {
+              widget.provider.setQuery(value);
+              setState(() {});
+            },
+            decoration: InputDecoration(
+              hintText: 'Поиск по файлам',
+              isDense: true,
+              prefixIcon: const Padding(
+                padding: EdgeInsets.all(12),
+                child: TmpsIcon(Ico.search, size: 18, color: TmpsColors.muted),
+              ),
+              suffixIcon: _controller.text.isEmpty
+                  ? null
+                  : IconButton(
+                      icon: const TmpsIcon(Ico.x, size: 18),
+                      tooltip: 'Очистить',
+                      onPressed: () {
+                        _controller.clear();
+                        widget.provider.setQuery('');
+                        setState(() {});
+                      },
+                    ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 6),
+        IconButton(
+          icon: const TmpsIcon(Ico.sort, size: 21),
+          tooltip: 'Сортировка: ${widget.provider.sort.label}',
+          onPressed: _pickSort,
+        ),
+      ],
+    );
   }
 }
 

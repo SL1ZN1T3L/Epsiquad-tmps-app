@@ -38,6 +38,7 @@ class Ico {
   static const telegram =
       '<path d="M21.5 4.5 2.8 11.7c-.9.4-.9 1.6.1 1.9l4.6 1.4 1.8 5.6c.2.7 1.1.9 1.6.4l2.6-2.4 4.9 3.6c.6.4 1.4.1 1.6-.6L22.9 5.8c.2-.9-.6-1.6-1.4-1.3z"/><path d="m7.5 15 10-7-7.5 8.5"/>';
   static const plus = '<path d="M12 5v14M5 12h14"/>';
+  static const minus = '<path d="M5 12h14"/>';
   static const user = '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>';
   static const logout = '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>';
   static const refresh = '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>';
@@ -63,6 +64,15 @@ class Ico {
   static const arrowDown = '<path d="M12 5v14M19 12l-7 7-7-7"/>';
   static const cloudOff =
       '<path d="M17.5 19H7a5 5 0 0 1-.6-10A7 7 0 0 1 8.3 6.4"/><path d="M11 5.1A5 5 0 0 1 19 9v.6a4.5 4.5 0 0 1 2.4 7.2"/><path d="m3 3 18 18"/>';
+  static const folder =
+      '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>';
+  static const search = '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>';
+  static const sort = '<path d="M3 6h18M6 12h12M10 18h4"/>';
+  static const qr =
+      '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v.01M14 21h3M20 17v4h-3"/>';
+  static const bell =
+      '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/>';
+  static const checkAll = '<path d="m2 12 5 5L18 6M12 17l1 1L22 7"/>';
   static const fingerprint =
       '<path d="M12 4a8 8 0 0 0-8 8v1.5"/><path d="M20 13.5V12a8 8 0 0 0-4-6.9"/><path d="M12 8a4 4 0 0 0-4 4v2a11 11 0 0 0 1 4.6"/><path d="M16 12.5V12a4 4 0 0 0-2-3.5"/><path d="M12 12v3a14 14 0 0 0 1.3 5.8"/><path d="M16.4 15.6a18 18 0 0 0 .3 3.6"/>';
 }

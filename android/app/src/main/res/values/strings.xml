@@ -6,4 +6,9 @@
     <string name="bg_downloader_resume">Продолжить</string>
     <string name="bg_downloader_notification_channel_name">Загрузки</string>
     <string name="bg_downloader_notification_channel_description">Ход скачивания и загрузки файлов</string>
+
+    <!-- Те же тексты под своими именами: TmpsApplication кладёт их в плагин при старте процесса -->
+    <string name="tmps_notif_cancel">Отменить</string>
+    <string name="tmps_notif_pause">Пауза</string>
+    <string name="tmps_notif_resume">Продолжить</string>
 </resources>

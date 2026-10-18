@@ -218,11 +218,16 @@ class _UploadRow extends StatelessWidget {
                     tooltip: 'Пауза',
                     onPressed: () => provider.pause(task),
                   ),
-                if (task.status == UploadStatus.paused ||
-                    task.status == UploadStatus.error)
+                if (task.status == UploadStatus.paused)
                   IconButton(
                     icon: const TmpsIcon(Ico.play, size: 22),
                     tooltip: 'Продолжить',
+                    onPressed: () => provider.resume(task),
+                  ),
+                if (task.status == UploadStatus.error)
+                  IconButton(
+                    icon: const TmpsIcon(Ico.refresh, size: 22),
+                    tooltip: 'Повторить',
                     onPressed: () => provider.resume(task),
                   ),
                 if (task.active || task.status == UploadStatus.error)

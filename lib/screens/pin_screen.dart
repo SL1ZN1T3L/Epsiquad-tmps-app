@@ -128,7 +128,7 @@ class _Key extends StatelessWidget {
   }
 }
 
-enum PinMode { unlock, create }
+enum PinMode { unlock, create, relock }
 
 class PinScreen extends StatefulWidget {
   const PinScreen({super.key, required this.mode});
@@ -150,7 +150,7 @@ class _PinScreenState extends State<PinScreen> {
   @override
   void initState() {
     super.initState();
-    if (widget.mode == PinMode.unlock) {
+    if (widget.mode != PinMode.create) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final app = context.read<AppProvider>();
@@ -164,7 +164,10 @@ class _PinScreenState extends State<PinScreen> {
   Future<void> _biometric() async {
     if (_busy) return;
     setState(() => _busy = true);
-    final error = await context.read<AppProvider>().unlockWithBiometrics();
+    final app = context.read<AppProvider>();
+    final error = widget.mode == PinMode.relock
+        ? await app.relockWithBiometrics()
+        : await app.unlockWithBiometrics();
     if (!mounted) return;
     setState(() {
       _busy = false;
@@ -221,7 +224,9 @@ class _PinScreenState extends State<PinScreen> {
       return;
     }
 
-    final error = await app.unlockWithPin(entered);
+    final error = widget.mode == PinMode.relock
+        ? await app.relockWithPin(entered)
+        : await app.unlockWithPin(entered);
     if (!mounted) return;
     if (error != null) HapticFeedback.heavyImpact();
     setState(() {
@@ -232,11 +237,14 @@ class _PinScreenState extends State<PinScreen> {
   }
 
   String get _title {
-    if (widget.mode == PinMode.unlock) return 'Введите пин-код';
+    if (widget.mode != PinMode.create) return 'Введите пин-код';
     return _confirming ? 'Повторите пин-код' : 'Придумайте пин-код';
   }
 
   String get _subtitle {
+    if (widget.mode == PinMode.relock) {
+      return 'Приложение заблокировано из-за бездействия';
+    }
     if (widget.mode == PinMode.unlock) return 'Он защищает вход в ваши хранилища';
     return _confirming
         ? 'Ещё раз, чтобы не ошибиться'
@@ -246,7 +254,7 @@ class _PinScreenState extends State<PinScreen> {
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppProvider>();
-    final biometric = widget.mode == PinMode.unlock &&
+    final biometric = widget.mode != PinMode.create &&
         app.biometricEnabled &&
         app.biometricAvailable;
 
@@ -282,7 +290,7 @@ class _PinScreenState extends State<PinScreen> {
                 onBiometric: biometric ? _biometric : null,
               ),
               const Spacer(flex: 2),
-              if (widget.mode == PinMode.unlock)
+              if (widget.mode != PinMode.create)
                 TextButton(
                   onPressed: _busy ? null : () => context.read<AppProvider>().signOut(),
                   child: const Text('Войти в другой аккаунт'),
