@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../messenger.dart';
+import 'e2ee.dart';
 
 class DownloadFailure implements Exception {
   DownloadFailure(this.message);
@@ -55,10 +57,10 @@ class DownloadService {
     if (_configured) return;
     _configured = true;
     FileDownloader().configureNotification(
-      running: const TaskNotification('{filename}', 'Скачивание, {progress}'),
-      complete: const TaskNotification('{filename}', 'Сохранено в Загрузки. Нажмите, чтобы открыть'),
-      error: const TaskNotification('{filename}', 'Не удалось скачать'),
-      paused: const TaskNotification('{filename}', 'Скачивание на паузе'),
+      running: const TaskNotification('{displayName}', 'Скачивание, {progress}'),
+      complete: const TaskNotification('{displayName}', 'Сохранено в Загрузки. Нажмите, чтобы открыть'),
+      error: const TaskNotification('{displayName}', 'Не удалось скачать'),
+      paused: const TaskNotification('{displayName}', 'Скачивание на паузе'),
       progressBar: true,
     );
   }
@@ -101,6 +103,9 @@ class DownloadService {
     required Uri url,
     required Map<String, String> headers,
     required String filename,
+    String? displayName,
+    E2eeDownload? decrypt,
+    void Function(String? hint)? onPhase,
     void Function(double progress)? onProgress,
     void Function(DownloadHandle handle)? onStart,
     void Function(bool paused)? onPaused,
@@ -119,7 +124,7 @@ class DownloadService {
       updates: Updates.statusAndProgress,
       retries: 3,
       allowPause: allowPause,
-      displayName: filename,
+      displayName: displayName ?? filename,
     );
 
     onStart?.call(DownloadHandle._(task));
@@ -150,12 +155,55 @@ class DownloadService {
       throw DownloadFailure(_reason(result));
     }
 
-    final saved = await FileDownloader().moveToSharedStorage(task, SharedStorage.downloads);
+    final String? saved;
+    if (decrypt == null) {
+      saved = await FileDownloader().moveToSharedStorage(task, SharedStorage.downloads);
+    } else {
+      // Скачался шифртекст: расшифровываем в файл с настоящим именем и только его кладём в «Загрузки».
+      onPhase?.call('Расшифровываю…');
+      try {
+        saved = await _decryptToDownloads(task, decrypt);
+      } on E2eeException catch (e) {
+        throw DownloadFailure(e.message);
+      } finally {
+        onPhase?.call(null);
+      }
+    }
     if (saved == null) {
       throw DownloadFailure('Файл скачался, но не удалось положить его в «Загрузки»');
     }
     await _remember(task.taskId, saved);
     return saved;
+  }
+
+  Future<String?> _decryptToDownloads(DownloadTask task, E2eeDownload decrypt) async {
+    final cipherPath = await task.filePath();
+    final plainPath = '${File(cipherPath).parent.path}/${_safeFileName(decrypt.saveAs)}';
+    try {
+      await E2ee.decryptFile(
+        source: cipherPath,
+        target: plainPath,
+        key: decrypt.key,
+        fileId: decrypt.fileId,
+        chunkSize: decrypt.chunkSize,
+      );
+    } finally {
+      try {
+        final cipher = File(cipherPath);
+        if (await cipher.exists()) await cipher.delete();
+      } catch (_) {}
+    }
+    return FileDownloader().moveFileToSharedStorage(plainPath, SharedStorage.downloads);
+  }
+
+  static String _safeFileName(String name) {
+    var safe = name.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_').trim();
+    if (safe.length > 120) {
+      final dot = safe.lastIndexOf('.');
+      final ext = dot > 0 && safe.length - dot <= 12 ? safe.substring(dot) : '';
+      safe = safe.substring(0, 120 - ext.length) + ext;
+    }
+    return safe.isEmpty ? 'file' : safe;
   }
 
   Future<bool> _pauseSupport(DownloadTask task) async {

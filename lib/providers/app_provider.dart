@@ -16,6 +16,7 @@ import '../services/reminder_service.dart';
 import '../services/secure_store.dart';
 import '../services/share_inbox.dart';
 import '../services/system_service.dart';
+import '../services/user_events.dart';
 import '../services/storage_service.dart';
 import '../services/update_service.dart';
 
@@ -39,6 +40,53 @@ class AppProvider extends ChangeNotifier {
   late final StorageService storages;
 
   AppStage _stage = AppStage.loading;
+
+  // ---- События аккаунта в реальном времени ----
+  // Канал открыт, пока приложение разблокировано и вход выполнен: в других клиентах создали хранилище, вошли в аккаунт,
+  // отключили устройство - экраны обновляются сами.
+  final StreamController<String> _events = StreamController<String>.broadcast();
+  UserEvents? _liveChannel;
+
+  /// События аккаунта: `storages`, `devices`, `account`. После восстановления связи приходят все три.
+  Stream<String> get events => _events.stream;
+
+  @override
+  void notifyListeners() {
+    super.notifyListeners();
+    _syncLiveChannel();
+  }
+
+  void _syncLiveChannel() {
+    final shouldRun = _stage == AppStage.ready && _tokens != null && !_autoLocked;
+    if (shouldRun && _liveChannel == null) {
+      _liveChannel = UserEvents(
+        token: () => _tokens?.accessToken,
+        onEvent: (type) {
+          if (!_events.isClosed) _events.add(type);
+          if (type == 'account') unawaited(_refreshProfile());
+        },
+        onReconnect: () {
+          for (final type in const ['storages', 'devices', 'account']) {
+            if (!_events.isClosed) _events.add(type);
+          }
+        },
+        ensureToken: () => auth.devices().then((_) {}),
+      )..start();
+    } else if (!shouldRun && _liveChannel != null) {
+      _liveChannel!.stop();
+      _liveChannel = null;
+    }
+  }
+
+  /// Данные аккаунта изменились в другом клиенте (пароль, Telegram, ключи доступа).
+  Future<void> _refreshProfile() async {
+    try {
+      final profile = await auth.me();
+      _user = profile.user;
+      super.notifyListeners();
+    } catch (_) {}
+  }
+
   TokenPair? _tokens;
   AppUser? _user;
   ServerConfig? _config;
@@ -69,6 +117,9 @@ class AppProvider extends ChangeNotifier {
   AppStage get stage => _stage;
   AppUser? get user => _user;
   ServerConfig? get config => _config;
+
+  /// Защищённое хранилище устройства: в нём лежат ключи E2EE-хранилищ.
+  SecureStore get secureStore => _store;
   bool get biometricEnabled => _biometricEnabled;
   bool get biometricAvailable => _biometricAvailable;
   bool get autoBiometricEnabled => _autoBiometricEnabled;
@@ -524,6 +575,9 @@ class AppProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _liveChannel?.stop();
+    _liveChannel = null;
+    unawaited(_events.close());
     api.close();
     _updates.close();
     super.dispose();

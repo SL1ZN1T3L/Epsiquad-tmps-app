@@ -48,6 +48,7 @@ class StorageScreen extends StatelessWidget {
           storages: app.storages,
           node: NodeService(),
           initial: item,
+          secure: app.secureStore,
         )
           ..load()
           ..connect();
@@ -113,6 +114,16 @@ class _StorageView extends StatelessWidget {
 
   void _openPreview(
       BuildContext context, StorageProvider provider, StorageFile file) {
+    if (provider.e2ee) {
+      // Предпросмотра у зашифрованных файлов нет: сервер видит только шифртекст, расшифровка идёт на устройстве.
+      if (provider.e2eeNeedsKey) {
+        unawaited(_askE2eeKey(context, provider));
+        return;
+      }
+      unawaited(provider.download(file));
+      _toast(context, 'Скачиваю и расшифровываю: ${file.title}');
+      return;
+    }
     Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) {
         final files = provider.visibleFiles;
@@ -173,6 +184,10 @@ class _StorageView extends StatelessWidget {
           children: [
             _header(context, provider),
             const SizedBox(height: 12),
+            if (provider.e2eeNeedsKey) ...[
+              _keyBanner(context, provider),
+              const SizedBox(height: 12),
+            ],
             _actions(context, provider),
             const SizedBox(height: 12),
             UploadPanel(provider: provider),
@@ -224,12 +239,20 @@ class _StorageView extends StatelessWidget {
                     onOpen: () => _openPreview(context, provider, file),
                     onLongPress: () => provider.toggleSelected(file.name),
                     onToggle: () => provider.toggleSelected(file.name),
-                    onShare: () => SharePlus.instance.share(
-                      ShareParams(text: provider.fileUri(file).toString()),
-                    ),
-                    onDownload: () => unawaited(provider.download(file)),
+                    onShare: provider.e2ee
+                        ? null
+                        : () => SharePlus.instance.share(
+                              ShareParams(text: provider.fileUri(file).toString()),
+                            ),
+                    onDownload: () {
+                      if (provider.e2eeNeedsKey) {
+                        unawaited(_askE2eeKey(context, provider));
+                        return;
+                      }
+                      unawaited(provider.download(file));
+                    },
                     onDelete: () =>
-                        _confirmDeleteFile(context, provider, file.name),
+                        _confirmDeleteFile(context, provider, file.name, file.title),
                   ),
             ],
           ],
@@ -258,18 +281,23 @@ class _StorageView extends StatelessWidget {
           icon: const TmpsIcon(Ico.download, size: 21),
           tooltip: 'Скачать',
           onPressed: () {
+            if (provider.e2eeNeedsKey) {
+              unawaited(_askE2eeKey(context, provider));
+              return;
+            }
             final count = provider.selectedCount;
             provider.downloadSelected();
             _toast(context,
                 'Скачивание началось: $count ${plural(count, 'файл', 'файла', 'файлов')}');
           },
         ),
-        IconButton(
-          icon: const TmpsIcon(Ico.share, size: 21),
-          tooltip: 'Поделиться ссылками',
-          onPressed: () => SharePlus.instance
-              .share(ShareParams(text: provider.selectedLinks())),
-        ),
+        if (!provider.e2ee)
+          IconButton(
+            icon: const TmpsIcon(Ico.share, size: 21),
+            tooltip: 'Поделиться ссылками',
+            onPressed: () => SharePlus.instance
+                .share(ShareParams(text: provider.selectedLinks())),
+          ),
         if (canWrite)
           IconButton(
             icon: const TmpsIcon(Ico.trash, size: 21, color: TmpsColors.danger),
@@ -292,7 +320,7 @@ class _StorageView extends StatelessWidget {
     await _run(context, provider.deleteSelected, 'Файлы удалены');
   }
 
-  Future<void> _showQr(BuildContext context, StorageItem item) {
+  Future<void> _showQr(BuildContext context, StorageItem item, String url) {
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -307,7 +335,7 @@ class _StorageView extends StatelessWidget {
                 borderRadius: BorderRadius.circular(16),
               ),
               child: QrImageView(
-                data: item.url,
+                data: url,
                 size: 220,
                 backgroundColor: Colors.white,
               ),
@@ -319,10 +347,12 @@ class _StorageView extends StatelessWidget {
               style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Наведите камеру телефона, чтобы открыть хранилище',
+            Text(
+              url.contains('#k=')
+                  ? 'В QR-коде есть ключ шифрования: не показывайте его посторонним'
+                  : 'Наведите камеру телефона, чтобы открыть хранилище',
               textAlign: TextAlign.center,
-              style: TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+              style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
             ),
           ],
         ),
@@ -331,7 +361,7 @@ class _StorageView extends StatelessWidget {
             FilledButton(
               onPressed: () {
                 Navigator.of(ctx).pop();
-                SharePlus.instance.share(ShareParams(text: item.url));
+                SharePlus.instance.share(ShareParams(text: url));
               },
               child: const Text('Поделиться ссылкой'),
             ),
@@ -381,6 +411,17 @@ class _StorageView extends StatelessWidget {
                 Text('${item.planName} · ${fmtSize(item.quotaBytes)}',
                     style:
                         const TextStyle(color: TmpsColors.muted, fontSize: 13)),
+                if (provider.e2ee) ...[
+                  const SizedBox(width: 8),
+                  _StatusChip(
+                    text: provider.e2eeNeedsKey ? 'E2EE · нужен ключ' : 'E2EE · зашифровано',
+                    color: provider.e2eeNeedsKey ? TmpsColors.warn : TmpsColors.ok,
+                  ),
+                ],
+                if (item.hasPassword) ...[
+                  const SizedBox(width: 8),
+                  const _StatusChip(text: 'пароль', color: TmpsColors.muted),
+                ],
               ],
             ),
             const SizedBox(height: 14),
@@ -395,7 +436,8 @@ class _StorageView extends StatelessWidget {
                 children: [
                   Expanded(
                     child: Text(
-                      item.url.replaceFirst(RegExp(r'^https?://'), ''),
+                      item.url.replaceFirst(RegExp(r'^https?://'), '') +
+                          (provider.shareUrl != item.url ? '#k=\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : ''),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -406,14 +448,14 @@ class _StorageView extends StatelessWidget {
                     visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.qr, size: 19),
                     tooltip: 'QR-код',
-                    onPressed: () => _showQr(context, item),
+                    onPressed: () => _showQr(context, item, provider.shareUrl),
                   ),
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.copy, size: 19),
                     tooltip: 'Копировать',
                     onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: item.url));
+                      await Clipboard.setData(ClipboardData(text: provider.shareUrl));
                       if (context.mounted) {
                         _toast(context, 'Ссылка скопирована');
                       }
@@ -424,13 +466,13 @@ class _StorageView extends StatelessWidget {
                     icon: const TmpsIcon(Ico.share, size: 19),
                     tooltip: 'Поделиться',
                     onPressed: () =>
-                        SharePlus.instance.share(ShareParams(text: item.url)),
+                        SharePlus.instance.share(ShareParams(text: provider.shareUrl)),
                   ),
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.external, size: 19),
                     tooltip: 'Открыть в браузере',
-                    onPressed: () => launchUrl(Uri.parse(item.url),
+                    onPressed: () => launchUrl(Uri.parse(provider.shareUrl),
                         mode: LaunchMode.externalApplication),
                   ),
                 ],
@@ -478,6 +520,32 @@ class _StorageView extends StatelessWidget {
     );
   }
 
+  Widget _keyBanner(BuildContext context, StorageProvider provider) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Хранилище зашифровано',
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+            const SizedBox(height: 6),
+            const Text(
+              'Имена и содержимое файлов шифруются на устройстве, сервер видит только шифртекст. '
+              'Чтобы читать файлы и загружать новые, введите ключ: он есть в ссылке с «#k=…».',
+              style: TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
+            ),
+            const SizedBox(height: 12),
+            FilledButton(
+              onPressed: () => _askE2eeKey(context, provider),
+              child: const Text('Ввести ключ'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _actions(BuildContext context, StorageProvider provider) {
     final item = provider.item;
     final buttons = <_ActionButton>[
@@ -486,7 +554,7 @@ class _StorageView extends StatelessWidget {
         label: 'Название',
         onTap: () => _onMenu(context, provider, 'rename'),
       ),
-      if (provider.files.isNotEmpty)
+      if (provider.files.isNotEmpty && !provider.e2ee)
         _ActionButton(
           icon: Ico.archive,
           label: 'Архивом',
@@ -509,6 +577,12 @@ class _StorageView extends StatelessWidget {
         label: 'Доступ',
         onTap: () => _onMenu(context, provider, 'access'),
       ),
+      if (context.read<AppProvider>().config?.passwordsAvailable ?? false)
+        _ActionButton(
+          icon: Ico.key,
+          label: item.hasPassword ? 'Пароль: есть' : 'Пароль',
+          onTap: () => _onMenu(context, provider, 'password'),
+        ),
       _ActionButton(
         icon: Ico.link,
         label: 'Новая ссылка',
@@ -572,10 +646,10 @@ class _StorageView extends StatelessWidget {
     );
   }
 
-  Future<void> _confirmDeleteFile(
-      BuildContext context, StorageProvider provider, String name) async {
+  Future<void> _confirmDeleteFile(BuildContext context, StorageProvider provider,
+      String name, String title) async {
     final ok = await _confirm(context,
-        title: 'Удалить «$name»?',
+        title: 'Удалить «$title»?',
         text: 'Файл исчезнет у всех, у кого есть ссылка.');
     if (!ok || !context.mounted) return;
     await _run(context, () => provider.deleteFiles([name]), 'Файл удалён');
@@ -642,6 +716,15 @@ class _StorageView extends StatelessWidget {
         }, 'Режим доступа изменён');
         break;
 
+      case 'password':
+        final choice = await _askPassword(context, item.hasPassword);
+        if (choice == null || !context.mounted) return;
+        await _run(context, () async {
+          final updated = await storages.setPassword(item.code, choice.password);
+          provider.applyItem(updated);
+        }, choice.password == null ? 'Пароль убран' : 'Пароль сохранён');
+        break;
+
       case 'rotate':
         final ok = await _confirm(context,
             title: 'Сменить ссылку?',
@@ -669,6 +752,123 @@ class _StorageView extends StatelessWidget {
         break;
     }
   }
+}
+
+class _StatusChip extends StatelessWidget {
+  const _StatusChip({required this.text, required this.color});
+
+  final String text;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: color.withAlpha(102)),
+        color: color.withAlpha(26),
+      ),
+      child: Text(text, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+    );
+  }
+}
+
+/// Результат диалога пароля: [password] == null - убрать пароль.
+class _PasswordChoice {
+  const _PasswordChoice(this.password);
+
+  final String? password;
+}
+
+Future<_PasswordChoice?> _askPassword(BuildContext context, bool hasPassword) async {
+  final controller = TextEditingController();
+  final result = await showDialog<_PasswordChoice>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(hasPassword ? 'Сменить пароль' : 'Пароль на вход'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Гости вводят пароль при открытии ссылки. Вы заходите без пароля. Пароль хранится на сервере только в виде хэша.',
+            style: TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: controller,
+            obscureText: true,
+            autofocus: true,
+            maxLength: 128,
+            decoration: const InputDecoration(labelText: 'Новый пароль, от 4 символов', counterText: ''),
+          ),
+        ],
+      ),
+      actions: [
+        DialogActions(children: [
+          FilledButton(
+            onPressed: () {
+              final value = controller.text;
+              if (value.length >= 4) Navigator.of(ctx).pop(_PasswordChoice(value));
+            },
+            child: const Text('Сохранить'),
+          ),
+          if (hasPassword)
+            OutlinedButton(
+              onPressed: () => Navigator.of(ctx).pop(const _PasswordChoice(null)),
+              child: const Text('Убрать пароль'),
+            ),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Отмена')),
+        ]),
+      ],
+    ),
+  );
+  controller.dispose();
+  return result;
+}
+
+/// Просит ключ шифрования (ссылку с `#k=…` или сам ключ) и проверяет его по метаданным хранилища.
+Future<void> _askE2eeKey(BuildContext context, StorageProvider provider) async {
+  final controller = TextEditingController();
+  final text = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Нужен ключ шифрования'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Хранилище зашифровано, ключа на этом устройстве нет. Вставьте полную ссылку с «#k=…» или сам ключ.',
+            style: TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: controller,
+            autofocus: true,
+            decoration: const InputDecoration(labelText: 'Ссылка с ключом или ключ'),
+          ),
+        ],
+      ),
+      actions: [
+        DialogActions(children: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('Расшифровать'),
+          ),
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Отмена')),
+        ]),
+      ],
+    ),
+  );
+  controller.dispose();
+  if (text == null || !context.mounted) return;
+  final ok = await provider.setE2eeKey(text);
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text(ok ? 'Ключ принят, файлы расшифрованы' : 'Ключ не подходит к этому хранилищу')),
+  );
 }
 
 /// Поиск по имени и выбор сортировки.

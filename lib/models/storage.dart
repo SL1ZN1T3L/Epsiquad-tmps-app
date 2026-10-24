@@ -68,6 +68,8 @@ class StorageItem {
     required this.extendRoomHours,
     required this.planOptions,
     required this.access,
+    this.hasPassword = false,
+    this.e2ee = false,
   });
 
   final String code;
@@ -86,6 +88,12 @@ class StorageItem {
   final double extendRoomHours;
   final List<PlanOption> planOptions;
   final String access;
+
+  /// На хранилище стоит пароль: гости вводят его при открытии ссылки (владелец заходит без пароля).
+  final bool hasPassword;
+
+  /// Сквозное шифрование: файлы и имена шифруются на устройстве, ключ сервер не видит.
+  final bool e2ee;
 
   String get displayTitle => (title ?? '').isNotEmpty ? title! : 'Хранилище $code';
   int get freeBytes => quotaBytes - usedBytes < 0 ? 0 : quotaBytes - usedBytes;
@@ -122,6 +130,8 @@ class StorageItem {
           .map((e) => PlanOption.fromJson(e as Map<String, dynamic>))
           .toList(growable: false),
       access: json['access'] as String? ?? 'public',
+      hasPassword: json['has_password'] as bool? ?? false,
+      e2ee: json['e2ee'] as bool? ?? false,
     );
   }
 }

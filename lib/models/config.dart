@@ -72,6 +72,7 @@ class ServerConfig {
     required this.userMaxActive,
     required this.upload,
     required this.accessModes,
+    this.features = const [],
   });
 
   final int apiVersion;
@@ -85,6 +86,12 @@ class ServerConfig {
   final int userMaxActive;
   final UploadRules upload;
   final List<String> accessModes;
+
+  /// Возможности сервера (`storage_password`, `e2ee`): у старого сервера списка нет.
+  final List<String> features;
+
+  bool get passwordsAvailable => features.contains('storage_password');
+  bool get e2eeAvailable => features.contains('e2ee');
 
   bool get telegramAvailable => (botUsername ?? '').isNotEmpty;
 
@@ -102,6 +109,7 @@ class ServerConfig {
       userMaxActive: maxActive ?? userMaxActive,
       upload: upload,
       accessModes: accessModes,
+      features: features,
     );
   }
 
@@ -129,6 +137,9 @@ class ServerConfig {
       userMaxActive: (json['user_max_active'] as num?)?.toInt() ?? 3,
       upload: UploadRules.fromJson(json['upload'] as Map<String, dynamic>?),
       accessModes: ((json['access_modes'] as List?) ?? const ['public', 'readonly', 'private'])
+          .map((e) => e.toString())
+          .toList(growable: false),
+      features: ((json['features'] as List?) ?? const [])
           .map((e) => e.toString())
           .toList(growable: false),
     );

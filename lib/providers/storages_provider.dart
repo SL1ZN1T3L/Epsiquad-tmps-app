@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../models/storage.dart';
@@ -5,9 +7,25 @@ import '../services/api_client.dart';
 import '../services/storage_service.dart';
 
 class StoragesProvider extends ChangeNotifier {
-  StoragesProvider(this._service, {this.onChanged});
+  StoragesProvider(this._service, {this.onChanged, Stream<String>? events}) {
+    // Хранилище создали, изменили или удалили в другом клиенте: список обновляется сам.
+    _eventsSubscription = events?.listen((type) {
+      if (type != 'storages') return;
+      _refreshTimer?.cancel();
+      _refreshTimer = Timer(const Duration(milliseconds: 300), () => unawaited(load(silent: true)));
+    });
+  }
 
   final StorageService _service;
+  StreamSubscription<String>? _eventsSubscription;
+  Timer? _refreshTimer;
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    _eventsSubscription?.cancel();
+    super.dispose();
+  }
 
   /// Вызывается после каждого изменения списка: по нему обновляются
   /// напоминания об истечении срока.
@@ -58,8 +76,19 @@ class StoragesProvider extends ChangeNotifier {
     onChanged?.call(_items);
   }
 
-  Future<StorageItem> create({required String plan, int? ttlHours, String? title}) async {
-    final item = await _service.create(plan: plan, ttlHours: ttlHours, title: title);
+  Future<StorageItem> create({
+    required String plan,
+    int? ttlHours,
+    String? title,
+    String? e2eeCheck,
+  }) async {
+    final item = await _service.create(plan: plan, ttlHours: ttlHours, title: title, e2eeCheck: e2eeCheck);
+    replace(item);
+    return item;
+  }
+
+  Future<StorageItem> setPassword(String code, String? password) async {
+    final item = await _service.setPassword(code, password);
     replace(item);
     return item;
   }

@@ -72,6 +72,10 @@ class StorageCard extends StatelessWidget {
                     const _Chip(text: 'только я', icon: Ico.lock, color: TmpsColors.warn),
                   if (item.access == 'readonly')
                     const _Chip(text: 'просмотр', icon: Ico.eye),
+                  if (item.e2ee)
+                    const _Chip(text: 'E2EE', icon: Ico.lock, color: TmpsColors.ok),
+                  if (item.hasPassword)
+                    const _Chip(text: 'пароль', icon: Ico.key),
                 ],
               ),
               const SizedBox(height: 14),

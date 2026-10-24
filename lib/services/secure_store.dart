@@ -25,6 +25,7 @@ class SecureStore {
   static const _kFails = 'pin_fails';
   static const _kDeviceId = 'device_id';
   static const _kBiometric = 'biometric_enabled';
+  static const _kE2eePrefix = 'e2ee.key.';
 
   static const int iterations = 120000;
   static const int maxAttempts = 10;
@@ -122,11 +123,30 @@ class SecureStore {
 
   Future<void> clearRefreshToken() => _storage.delete(key: _kBox);
 
+  // ---- Ключи сквозного шифрования хранилищ ----
+
+  /// Ключ E2EE-хранилища (base64url). Лежит в защищённом хранилище Android, по одному на код хранилища.
+  Future<String?> readE2eeKey(String code) => _storage.read(key: '$_kE2eePrefix$code');
+
+  Future<void> writeE2eeKey(String code, String key) => _storage.write(key: '$_kE2eePrefix$code', value: key);
+
+  Future<void> deleteE2eeKey(String code) => _storage.delete(key: '$_kE2eePrefix$code');
+
+  Future<void> _wipeE2eeKeys() async {
+    try {
+      final all = await _storage.readAll();
+      for (final key in all.keys) {
+        if (key.startsWith(_kE2eePrefix)) await _storage.delete(key: key);
+      }
+    } catch (_) {}
+  }
+
   Future<void> wipe() async {
     _key = null;
     for (final key in [_kBox, _kSalt, _kCheck, _kMirror, _kFails]) {
       await _storage.delete(key: key);
     }
+    await _wipeE2eeKeys();
     await setBiometricEnabled(false);
   }
 

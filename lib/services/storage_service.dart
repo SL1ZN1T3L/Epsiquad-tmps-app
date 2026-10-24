@@ -24,10 +24,16 @@ class StorageService {
   StorageItem _one(Map<String, dynamic> data) =>
       StorageItem.fromJson((data['storage'] as Map<String, dynamic>?) ?? const {});
 
-  Future<StorageItem> create({required String plan, int? ttlHours, String? title}) async {
+  Future<StorageItem> create({
+    required String plan,
+    int? ttlHours,
+    String? title,
+    String? e2eeCheck,
+  }) async {
     final body = <String, dynamic>{'plan': plan};
     if (ttlHours != null) body['ttl_hours'] = ttlHours;
     if (title != null && title.trim().isNotEmpty) body['title'] = title.trim();
+    if (e2eeCheck != null) body['e2ee_check'] = e2eeCheck;
     return _one(await _api.post('$kApiPrefix/storages', body: body));
   }
 
@@ -49,6 +55,10 @@ class StorageService {
 
   Future<StorageItem> setAccess(String code, String access) async =>
       _one(await _api.patch('$kApiPrefix/storages/$code/access', body: {'access': access}));
+
+  /// Задаёт пароль на вход по ссылке; null убирает пароль.
+  Future<StorageItem> setPassword(String code, String? password) async =>
+      _one(await _api.post('$kApiPrefix/storages/$code/password', body: {'password': password}));
 
   Future<StorageItem> rotate(String code) async =>
       _one(await _api.post('$kApiPrefix/storages/$code/rotate'));

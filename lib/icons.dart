@@ -46,6 +46,7 @@ class Ico {
   static const plan = '<path d="m3 8 4-4 4 4M7 4v16M21 16l-4 4-4-4M17 20V4"/>';
   static const edit = '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>';
   static const phone = '<rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18.5h2"/>';
+  static const key = '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M16 7l3 3M19 4l2 2"/>';
   static const lock = '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>';
   static const ban = '<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>';
   static const settings =

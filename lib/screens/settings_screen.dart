@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -129,11 +131,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _devicesError;
   int _versionTaps = 0;
   DateTime? _lastVersionTap;
+  StreamSubscription<String>? _events;
 
   @override
   void initState() {
     super.initState();
     _loadDevices();
+    // Вход или отключение устройства в другом клиенте: список устройств обновляется сам.
+    _events = context.read<AppProvider>().events.listen((type) {
+      if (type == 'devices') unawaited(_loadDevices());
+    });
+  }
+
+  @override
+  void dispose() {
+    _events?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadDevices() async {

@@ -14,6 +14,7 @@ import '../providers/app_provider.dart';
 import '../providers/storage_provider.dart';
 import '../providers/storages_provider.dart';
 import '../services/api_client.dart';
+import '../services/e2ee.dart';
 import '../services/share_inbox.dart';
 import '../theme.dart';
 import '../widgets/brand.dart';
@@ -34,6 +35,7 @@ class StoragesScreen extends StatelessWidget {
       create: (_) => StoragesProvider(
         app.storages,
         onChanged: (items) => unawaited(app.syncReminders(items)),
+        events: app.events,
       )..load(),
       child: const _StoragesView(),
     );
@@ -59,20 +61,67 @@ class _StoragesView extends StatelessWidget {
     final request = await showModalBottomSheet<_CreateRequest>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _CreateSheet(plans: plans),
+      builder: (_) => _CreateSheet(plans: plans, e2eeAvailable: config.e2eeAvailable),
     );
     if (request == null || !context.mounted) return;
     try {
+      // Ключ шифрования создаётся на устройстве и на сервер не отправляется: уходит только проверочная запись.
+      String? key;
+      String? check;
+      if (request.e2ee) {
+        key = E2ee.generateKey();
+        check = await E2ee.makeCheck(E2ee.keyBytes(key));
+      }
       final item = await provider.create(
         plan: request.plan,
         ttlHours: request.ttlHours,
         title: request.title,
+        e2eeCheck: check,
       );
+      if (key != null) {
+        try {
+          await app.secureStore.writeE2eeKey(item.code, key);
+        } catch (_) {}
+      }
       if (!context.mounted) return;
       _toast(context, 'Хранилище ${item.code} создано');
+      if (key != null) await _showKeyNotice(context, item, key);
     } on ApiException catch (e) {
       if (context.mounted) _toast(context, e.message);
     }
+  }
+
+  Future<void> _showKeyNotice(BuildContext context, StorageItem item, String key) {
+    final link = '${item.url}#k=$key';
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Сохраните ключ шифрования'),
+        content: const Text(
+          'Ключ лежит только в ссылке (часть после «#») и в защищённом хранилище этого телефона. '
+          'Сервер его не знает и восстановить не сможет: потеряете ссылку, например при переустановке приложения, '
+          'и файлы будет не расшифровать.',
+          style: TextStyle(color: TmpsColors.muted, height: 1.45),
+        ),
+        actions: [
+          DialogActions(children: [
+            FilledButton(
+              onPressed: () async {
+                await Clipboard.setData(ClipboardData(text: link));
+                if (ctx.mounted) Navigator.of(ctx).pop();
+                if (context.mounted) _toast(context, 'Ссылка с ключом скопирована');
+              },
+              child: const Text('Копировать ссылку с ключом'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Закрыть'),
+            ),
+          ]),
+        ],
+      ),
+    );
   }
 
   static void _toast(BuildContext context, String message) {
@@ -416,17 +465,21 @@ class _ShareTargetSheet extends StatelessWidget {
 }
 
 class _CreateRequest {
-  const _CreateRequest({required this.plan, this.ttlHours, this.title});
+  const _CreateRequest({required this.plan, this.ttlHours, this.title, this.e2ee = false});
 
   final String plan;
   final int? ttlHours;
   final String? title;
+  final bool e2ee;
 }
 
 class _CreateSheet extends StatefulWidget {
-  const _CreateSheet({required this.plans});
+  const _CreateSheet({required this.plans, this.e2eeAvailable = false});
 
   final List<PlanInfo> plans;
+
+  /// Сервер умеет сквозное шифрование: тогда показываем переключатель.
+  final bool e2eeAvailable;
 
   @override
   State<_CreateSheet> createState() => _CreateSheetState();
@@ -435,6 +488,7 @@ class _CreateSheet extends StatefulWidget {
 class _CreateSheetState extends State<_CreateSheet> {
   late PlanInfo _plan = widget.plans.first;
   int? _ttl;
+  bool _e2ee = false;
   final _title = TextEditingController();
 
   @override
@@ -535,11 +589,24 @@ class _CreateSheetState extends State<_CreateSheet> {
                 counterText: '',
               ),
             ),
+            if (widget.e2eeAvailable) ...[
+              const SizedBox(height: 6),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _e2ee,
+                onChanged: (v) => setState(() => _e2ee = v),
+                title: const Text('Сквозное шифрование (E2EE)'),
+                subtitle: const Text(
+                  'Файлы и имена шифруются на устройстве, сервер видит только шифртекст. Ключ есть только в ссылке: потеряете её, и данные не восстановить. Без предпросмотра и архивов.',
+                  style: TextStyle(color: TmpsColors.faint, fontSize: 12, height: 1.35),
+                ),
+              ),
+            ],
             const SizedBox(height: 18),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(
                 _CreateRequest(
-                    plan: _plan.id, ttlHours: _ttl, title: _title.text),
+                    plan: _plan.id, ttlHours: _ttl, title: _title.text, e2ee: _e2ee),
               ),
               child: const Text('Создать'),
             ),

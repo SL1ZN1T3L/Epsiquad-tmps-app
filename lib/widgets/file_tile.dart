@@ -52,7 +52,9 @@ class FileTile extends StatelessWidget {
   /// Идёт выбор нескольких файлов: нажатие отмечает файл, кнопки скрыты.
   final bool selecting;
   final bool selected;
-  final VoidCallback onShare;
+
+  /// null - ссылку на файл дать нельзя (в зашифрованном хранилище по ней отдаётся шифртекст).
+  final VoidCallback? onShare;
   final VoidCallback onDownload;
   final VoidCallback onDelete;
   final bool canDelete;
@@ -95,7 +97,7 @@ class FileTile extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        file.name,
+                        file.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
@@ -105,7 +107,7 @@ class FileTile extends StatelessWidget {
                         children: [
                           Flexible(
                             child: Text(
-                              '${fmtSize(file.size)} · ${fmtRelative(file.modifiedAt)}',
+                              '${fmtSize(file.shownSize)} · ${fmtRelative(file.modifiedAt)}',
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
                               style: const TextStyle(color: TmpsColors.muted, fontSize: 12),
@@ -135,7 +137,7 @@ class FileTile extends StatelessWidget {
                     tooltip: 'Скачать',
                     onPressed: onDownload,
                   ),
-                if (!selecting)
+                if (!selecting && onShare != null)
                   IconButton(
                     visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.share, size: 19),

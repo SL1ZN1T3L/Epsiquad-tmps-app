@@ -13,7 +13,9 @@ import '../models/storage.dart';
 import '../models/storage_file.dart';
 import '../services/api_client.dart';
 import '../services/download_service.dart';
+import '../services/e2ee.dart';
 import '../services/node_service.dart';
+import '../services/secure_store.dart';
 import '../services/storage_service.dart';
 
 enum UploadStatus { queued, uploading, paused, done, error, canceled }
@@ -116,10 +118,20 @@ class FileDownload {
     required this.name,
     required this.build,
     required this.allowPause,
+    this.cipherName,
+    this.decrypt,
   });
 
   final String id;
+
+  /// Имя для показа и для «Загрузок» (в зашифрованном хранилище - расшифрованное).
   final String name;
+
+  /// Имя файла на сервере, если оно отличается от [name] (шифртекст до расшифровки).
+  final String? cipherName;
+
+  /// Не null - скачанный файл нужно расшифровать перед сохранением.
+  final E2eeDownload? decrypt;
 
   /// Как заново собрать адрес скачивания при повторе.
   final Uri Function() build;
@@ -180,14 +192,20 @@ class StorageProvider extends ChangeNotifier {
     required StorageService storages,
     required NodeService node,
     required StorageItem initial,
+    SecureStore? secure,
   })  : _storages = storages,
         _node = node,
+        _secure = secure,
         _item = initial {
     unawaited(_loadSort());
   }
 
   final StorageService _storages;
   final NodeService _node;
+  final SecureStore? _secure;
+
+  Uint8List? _e2eeKey;
+  String? _e2eeKeyText;
 
   StorageItem _item;
   StorageState? _state;
@@ -223,6 +241,89 @@ class StorageProvider extends ChangeNotifier {
   List<FileDownload> get downloads => List.unmodifiable(_downloads);
   List<StorageFile> get files => _state?.files ?? const [];
 
+  // ---- Сквозное шифрование ----
+
+  /// Хранилище зашифровано (флаг приходит и из списка хранилищ, и из состояния ноды).
+  bool get e2ee => _item.e2ee || (_state?.e2ee ?? false);
+
+  /// Зашифрованное хранилище, а ключа на этом устройстве нет: файлы не прочитать и не загрузить.
+  bool get e2eeNeedsKey => e2ee && _e2eeKey == null;
+
+  /// Ссылка на хранилище; в зашифрованном добавляется ключ (`#k=…`), если он есть на устройстве.
+  String get shareUrl {
+    final key = _e2eeKeyText;
+    return e2ee && key != null ? '${_item.url}#k=$key' : _item.url;
+  }
+
+  /// Принимает ключ или ссылку с `#k=…`. false, если ключ не подходит к этому хранилищу.
+  Future<bool> setE2eeKey(String text) async {
+    final raw = E2ee.extractKey(text);
+    if (raw == null || !await _acceptKey(raw)) return false;
+    try {
+      await _secure?.writeE2eeKey(_item.code, raw);
+    } catch (_) {}
+    await _decorate();
+    _ping();
+    return true;
+  }
+
+  Future<bool> _acceptKey(String raw) async {
+    try {
+      final key = E2ee.keyBytes(raw);
+      final check = _state?.e2eeCheck;
+      if (check != null && !await E2ee.verifyCheck(key, check)) return false;
+      _e2eeKey = key;
+      _e2eeKeyText = raw;
+      return true;
+    } on E2eeException {
+      return false;
+    }
+  }
+
+  Future<void> _loadSavedKey() async {
+    if (_e2eeKey != null) return;
+    try {
+      final raw = await _secure?.readE2eeKey(_item.code);
+      if (raw != null) await _acceptKey(raw);
+    } catch (_) {}
+  }
+
+  /// Расшифровывает имена файлов; без ключа показывает заглушку.
+  Future<void> _decorate() async {
+    final state = _state;
+    if (state == null || !e2ee) return;
+    final key = _e2eeKey;
+    final next = <StorageFile>[];
+    for (final file in state.files) {
+      if (file.chunkSize != null || !E2ee.isEncryptedName(file.name)) {
+        next.add(file);
+        continue;
+      }
+      if (key == null) {
+        next.add(file.copyWith(displayName: 'Зашифрованный файл'));
+        continue;
+      }
+      final decoded = await E2ee.decryptName(key, file.name);
+      if (decoded == null) {
+        next.add(file.copyWith(displayName: 'Не удалось расшифровать имя'));
+        continue;
+      }
+      next.add(file.copyWith(
+        displayName: decoded.name,
+        chunkSize: decoded.chunkSize,
+        plainSize: E2ee.plainSize(file.size, decoded.chunkSize),
+        kind: kindForName(decoded.name),
+      ));
+    }
+    _state = state.withFiles(next);
+  }
+
+  Future<void> _prepareE2ee() async {
+    if (!e2ee) return;
+    await _loadSavedKey();
+    await _decorate();
+  }
+
   // ---- Поиск и сортировка ----
 
   FileSort get sort => _sort;
@@ -234,14 +335,14 @@ class StorageProvider extends ChangeNotifier {
     final needle = _query.trim().toLowerCase();
     final list = [
       for (final file in files)
-        if (needle.isEmpty || file.name.toLowerCase().contains(needle)) file,
+        if (needle.isEmpty || file.title.toLowerCase().contains(needle)) file,
     ];
     list.sort(_compare);
     return list;
   }
 
   int _compare(StorageFile a, StorageFile b) {
-    int byName() => a.name.toLowerCase().compareTo(b.name.toLowerCase());
+    int byName() => a.title.toLowerCase().compareTo(b.title.toLowerCase());
     int then(int primary) => primary != 0 ? primary : byName();
     switch (_sort) {
       case FileSort.dateDesc:
@@ -253,9 +354,9 @@ class StorageProvider extends ChangeNotifier {
       case FileSort.nameDesc:
         return -byName();
       case FileSort.sizeDesc:
-        return then(b.size.compareTo(a.size));
+        return then(b.shownSize.compareTo(a.shownSize));
       case FileSort.sizeAsc:
-        return then(a.size.compareTo(b.size));
+        return then(a.shownSize.compareTo(b.shownSize));
       case FileSort.type:
         return then(a.kind.compareTo(b.kind));
     }
@@ -376,6 +477,7 @@ class StorageProvider extends ChangeNotifier {
     try {
       _item = await _storages.get(_item.code);
       _state = await _withGrant((grant) => _node.state(_item.code, grant));
+      await _prepareE2ee();
       _pruneSelection();
       _error = null;
     } on ApiException catch (e) {
@@ -402,7 +504,30 @@ class StorageProvider extends ChangeNotifier {
   }
 
   Future<void> download(StorageFile file) {
-    return _startDownload(file.name, () => _node.fileUri(_item.code, file.name));
+    if (!e2ee) {
+      return _startDownload(file.name, () => _node.fileUri(_item.code, file.name));
+    }
+    final key = _e2eeKey;
+    final chunk = file.chunkSize;
+    if (key == null || chunk == null) {
+      final failed = FileDownload(
+        id: '${DateTime.now().microsecondsSinceEpoch}-${_downloads.length}',
+        name: file.title,
+        build: () => _node.fileUri(_item.code, file.name),
+        allowPause: false,
+      )
+        ..canPause = false
+        ..error = 'Нужен ключ шифрования';
+      _downloads.add(failed);
+      _ping();
+      return Future.value();
+    }
+    return _startDownload(
+      file.title,
+      () => _node.fileUri(_item.code, file.name),
+      cipherName: file.name,
+      decrypt: E2eeDownload(key: key, fileId: file.name, chunkSize: chunk, saveAs: file.title),
+    );
   }
 
   Future<void> downloadArchive() {
@@ -413,12 +538,20 @@ class StorageProvider extends ChangeNotifier {
     );
   }
 
-  Future<void> _startDownload(String name, Uri Function() build, {bool allowPause = true}) {
+  Future<void> _startDownload(
+    String name,
+    Uri Function() build, {
+    bool allowPause = true,
+    String? cipherName,
+    E2eeDownload? decrypt,
+  }) {
     final job = FileDownload(
       id: '${DateTime.now().microsecondsSinceEpoch}-${_downloads.length}',
       name: name,
       build: build,
       allowPause: allowPause,
+      cipherName: cipherName,
+      decrypt: decrypt,
     )..canPause = allowPause;
     _downloads.add(job);
     _ping();
@@ -447,7 +580,13 @@ class StorageProvider extends ChangeNotifier {
       job.savedPath = await _files.save(
         url: job.build(),
         headers: _node.ownerHeaders(grant),
-        filename: job.name,
+        filename: job.cipherName ?? job.name,
+        displayName: job.name,
+        decrypt: job.decrypt,
+        onPhase: (hint) {
+          job.hint = hint;
+          _ping();
+        },
         allowPause: job.allowPause,
         onStart: (handle) {
           job.handle = handle;
@@ -655,7 +794,21 @@ class StorageProvider extends ChangeNotifier {
     }
   }
 
+  /// Проверяет, что сервер выдал ту же разбивку на куски, с которой посчитан размер шифртекста.
+  void _checkWire(UploadSession session, int wireChunk, int plainSize) {
+    if (session.chunkSize != wireChunk || session.totalChunks != E2ee.chunkCount(plainSize, wireChunk)) {
+      throw ApiException('Размер части на сервере изменился, откройте хранилище заново');
+    }
+  }
+
   Future<void> _runTask(UploadTask task) async {
+    final key = _e2eeKey;
+    if (e2ee && key == null) {
+      task.status = UploadStatus.error;
+      task.error = 'Нужен ключ шифрования';
+      _ping();
+      return;
+    }
     task.armAbort();
     task.status = UploadStatus.uploading;
     task.error = null;
@@ -665,16 +818,26 @@ class StorageProvider extends ChangeNotifier {
     try {
       await reader.open();
 
+      // В зашифрованном хранилище на сервер уходит шифртекст: другое имя, другой размер, другие куски.
+      final wireChunk = _state?.chunkSize ?? 8 * 1024 * 1024;
+      Future<String> wireName() async =>
+          key == null ? task.name : await E2ee.encryptName(key, task.name, wireChunk);
+      final wireSize = key == null ? task.size : E2ee.encryptedSize(task.size, wireChunk);
+
       final startedUid = task.uid;
       final resumed = startedUid == null
           ? null
           : await _withGrant((grant) => _node.uploadState(_item.code, grant, startedUid));
       UploadSession session = resumed ??
-          await _withGrant((grant) => _node.initUpload(_item.code, grant, task.name, task.size));
+          await _withGrant((grant) async =>
+              _node.initUpload(_item.code, grant, await wireName(), wireSize));
+      if (key != null) _checkWire(session, wireChunk, task.size);
       task.uid = session.uid;
 
+      int step() => key == null ? session.chunkSize : E2ee.plainChunkSize(session.chunkSize);
+
       var received = session.received;
-      task.sentBytes = min(task.size, received.length * session.chunkSize);
+      task.sentBytes = min(task.size, received.length * step());
       _ping();
 
       for (var index = 0; index < session.totalChunks; index++) {
@@ -683,14 +846,23 @@ class StorageProvider extends ChangeNotifier {
         if (task.status == UploadStatus.canceled) return;
         if (received.contains(index)) continue;
 
-        final offset = index * session.chunkSize;
-        final length = min(session.chunkSize, task.size - offset);
+        final offset = index * step();
+        final length = min(step(), task.size - offset);
         final bytes = await reader.read(offset, length);
         if (bytes.length != length) {
           throw ApiException('Файл изменился или стал недоступен');
         }
 
         final uid = session.uid;
+        final List<int> payload = key == null
+            ? bytes
+            : await E2ee.encryptChunkInIsolate(
+                key,
+                bytes is Uint8List ? bytes : Uint8List.fromList(bytes),
+                index,
+                session.totalChunks,
+                session.name,
+              );
         try {
           await _transient(
             task,
@@ -700,7 +872,7 @@ class StorageProvider extends ChangeNotifier {
                 grant,
                 uid,
                 index,
-                bytes,
+                payload,
                 abort: task.abortSignal,
               ),
             ),
@@ -712,8 +884,9 @@ class StorageProvider extends ChangeNotifier {
           if (task.status != UploadStatus.uploading) return;
 
           session = await _withGrant(
-            (grant) => _node.initUpload(_item.code, grant, task.name, task.size),
+            (grant) async => _node.initUpload(_item.code, grant, await wireName(), wireSize),
           );
+          if (key != null) _checkWire(session, wireChunk, task.size);
           task.uid = session.uid;
           received = session.received;
           task.sentBytes = 0;
@@ -733,6 +906,9 @@ class StorageProvider extends ChangeNotifier {
       task.status = UploadStatus.done;
       task.sentBytes = task.size;
     } on ApiException catch (e) {
+      task.status = UploadStatus.error;
+      task.error = e.message;
+    } on E2eeException catch (e) {
       task.status = UploadStatus.error;
       task.error = e.message;
     } catch (_) {
@@ -785,6 +961,12 @@ class StorageProvider extends ChangeNotifier {
         _pruneSelection();
         _error = null;
         _ping();
+        if (e2ee) {
+          unawaited(_prepareE2ee().then((_) {
+            _pruneSelection();
+            _ping();
+          }));
+        }
         return;
       default:
         _scheduleReload();
