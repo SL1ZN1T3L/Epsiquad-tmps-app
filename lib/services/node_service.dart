@@ -31,8 +31,7 @@ class NodeService {
     return base.replace(
       path: '$root$path',
       queryParameters: query == null || query.isEmpty ? null : query,
-      fragment: '',
-    );
+    ).removeFragment();
   }
 
   /// Адрес ноды не зашит в приложении: сервер выдаёт его в owner grant.

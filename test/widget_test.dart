@@ -203,14 +203,16 @@ void main() {
         'rotate': ['POST', '/custom/v9/storages/{code}/rotate'],
         'delete_storage': ['DELETE', '/custom/v9/storages/{code}'],
       };
-      final paths = <String, dynamic>{
-        for (final entry in operations.entries)
-          entry.value[1]: {
-            entry.value[0].toLowerCase(): {
-              'operationId': '${entry.key}_generated',
-            },
-          },
-      };
+      final paths = <String, Map<String, dynamic>>{};
+      for (final entry in operations.entries) {
+        final methods = paths.putIfAbsent(
+          entry.value[1],
+          () => <String, dynamic>{},
+        );
+        methods[entry.value[0].toLowerCase()] = {
+          'operationId': '${entry.key}_generated',
+        };
+      }
       var meCalls = 0;
       final api = ApiClient(
         client: MockClient((request) async {
