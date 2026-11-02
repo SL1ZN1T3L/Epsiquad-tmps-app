@@ -115,6 +115,7 @@ class _StoragesView extends StatelessWidget {
               child: const Text('Копировать ссылку с ключом'),
             ),
             TextButton(
+              style: DialogActions.cancelStyle(ctx),
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('Закрыть'),
             ),
@@ -215,7 +216,7 @@ class _StoragesView extends StatelessWidget {
                 child: const Text('Выйти'),
               ),
               TextButton(
-                style: DialogActions.dangerStyle(dialogContext),
+                style: DialogActions.cancelStyle(dialogContext),
                 onPressed: () => Navigator.of(dialogContext).pop(false),
                 child: const Text('Отмена'),
               ),
@@ -237,9 +238,16 @@ class _StoragesView extends StatelessWidget {
     int limit,
     bool admin,
   ) {
+    final canCreate = admin || items.length < limit;
     if (provider.loading && items.isEmpty) {
-      return const Center(
-          child: CircularProgressIndicator(color: TmpsColors.accent));
+      return ListView(
+        padding: const EdgeInsets.fromLTRB(16, 20, 16, 96),
+        children: const [
+          StorageCardSkeleton(),
+          SizedBox(height: 12),
+          StorageCardSkeleton(),
+        ],
+      );
     }
     if (provider.error != null && items.isEmpty) {
       return ListView(
@@ -275,13 +283,19 @@ class _StoragesView extends StatelessWidget {
           ),
         ),
         if (items.isEmpty)
-          const Padding(
-            padding: EdgeInsets.only(top: 60),
+          Padding(
+            padding: const EdgeInsets.only(top: 44),
             child: EmptyState(
               icon: Ico.box,
               title: 'Пока пусто',
-              subtitle:
-                  'Создайте хранилище, загрузите файлы и отправьте короткую ссылку.',
+              subtitle: 'Создайте хранилище, загрузите файлы и отправьте короткую ссылку.',
+              action: canCreate
+                  ? FilledButton.icon(
+                      onPressed: () => _create(context),
+                      icon: const TmpsIcon(Ico.plus, size: 19),
+                      label: const Text('Создать хранилище'),
+                    )
+                  : null,
             ),
           ),
         for (final item in items) ...[
@@ -311,40 +325,66 @@ class _StoragesView extends StatelessWidget {
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: color),
       ),
-      child: Row(
-        children: [
-          TmpsIcon(required ? Ico.warning : Ico.download, color: color),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  required ? 'Нужно обновить приложение' : 'Вышла новая версия',
-                  style: const TextStyle(fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  required
-                      ? 'Сервер больше не поддерживает эту версию'
-                      : 'Версия ${release?.version ?? ''} доступна на GitHub',
-                  style:
-                      const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
-                ),
-              ],
-            ),
-          ),
-          if (release != null)
-            FilledButton(
-              style: DialogActions.primaryStyle(context),
-              onPressed: () => showDialog<void>(
-                context: context,
-                barrierDismissible: false,
-                builder: (_) => UpdateDialog(app: app, release: release),
+      child: LayoutBuilder(
+        builder: (context, box) {
+          final text = Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                required ? 'Нужно обновить приложение' : 'Вышла новая версия',
+                style: const TextStyle(fontWeight: FontWeight.w600),
               ),
-              child: const Text('Обновить'),
-            ),
-        ],
+              const SizedBox(height: 3),
+              Text(
+                required
+                    ? 'Сервер больше не поддерживает эту версию'
+                    : 'Версия ${release?.version ?? ''} доступна на GitHub',
+                style: const TextStyle(color: TmpsColors.muted, fontSize: 13),
+              ),
+            ],
+          );
+          final button = release == null
+              ? null
+              : FilledButton(
+                  style: DialogActions.primaryStyle(context),
+                  onPressed: () => showDialog<void>(
+                    context: context,
+                    barrierDismissible: false,
+                    builder: (_) => UpdateDialog(app: app, release: release),
+                  ),
+                  child: const Text('Обновить'),
+                );
+          if (box.maxWidth < 430) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TmpsIcon(required ? Ico.warning : Ico.download, color: color),
+                    const SizedBox(width: 12),
+                    Expanded(child: text),
+                  ],
+                ),
+                if (button != null) ...[
+                  const SizedBox(height: 12),
+                  button,
+                ],
+              ],
+            );
+          }
+          return Row(
+            children: [
+              TmpsIcon(required ? Ico.warning : Ico.download, color: color),
+              const SizedBox(width: 12),
+              Expanded(child: text),
+              if (button != null) ...[
+                const SizedBox(width: 12),
+                button,
+              ],
+            ],
+          );
+        },
       ),
     );
   }
@@ -514,95 +554,127 @@ class _CreateSheetState extends State<_CreateSheet> {
   Widget build(BuildContext context) {
     final bottom = MediaQuery.of(context).viewInsets.bottom;
     return Padding(
-      padding: EdgeInsets.fromLTRB(20, 18, 20, bottom + 24),
-      child: SingleChildScrollView(
+      padding: EdgeInsets.fromLTRB(20, 18, 20, bottom + 16),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.84,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Center(
-              child: Container(
-                width: 44,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: TmpsColors.border,
-                  borderRadius: BorderRadius.circular(99),
-                ),
-              ),
-            ),
-            const SizedBox(height: 18),
-            const Text('Новое хранилище',
-                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 18),
-            const Text('Тариф',
-                style: TextStyle(color: TmpsColors.muted, fontSize: 13)),
-            const SizedBox(height: 8),
-            for (final plan in widget.plans) ...[
-              _PlanTile(
-                plan: plan,
-                selected: plan.id == _plan.id,
-                onTap: () => _pick(plan),
-              ),
-              const SizedBox(height: 8),
-            ],
-            if (_plan.ttlOptions.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              const Text('Срок хранения',
-                  style: TextStyle(color: TmpsColors.muted, fontSize: 13)),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  for (final hours in _plan.ttlOptions)
-                    ChoiceChip(
-                      label: Text(hours < 24 ? '$hours ч' : _daysLabel(hours)),
-                      selected: _ttl == hours,
-                      onSelected: (_) => setState(() => _ttl = hours),
-                      backgroundColor: TmpsColors.surface2,
-                      selectedColor: TmpsColors.accent,
-                      labelStyle: TextStyle(
-                        color: _ttl == hours ? Colors.white : TmpsColors.text,
-                        fontWeight: FontWeight.w600,
+            Flexible(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 44,
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: TmpsColors.border,
+                          borderRadius: BorderRadius.circular(99),
+                        ),
                       ),
-                      side: const BorderSide(color: TmpsColors.border),
                     ),
-                ],
-              ),
-              if (_plan.maxLifetimeHours != null) ...[
-                const SizedBox(height: 10),
-                Text(
-                  _plan.extendable
-                      ? 'Продлить можно позже, суммарно до ${_hoursLabel(_plan.maxLifetimeHours!)} с момента создания.'
-                      : 'Этот тариф не продлевается.',
-                  style: const TextStyle(
-                      color: TmpsColors.faint, fontSize: 12.5, height: 1.4),
+                    const SizedBox(height: 18),
+                    const Text('Новое хранилище',
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 18),
+                    const Text('Тариф',
+                        style: TextStyle(color: TmpsColors.muted, fontSize: 13.5)),
+                    const SizedBox(height: 8),
+                    for (final plan in widget.plans) ...[
+                      _PlanTile(
+                        plan: plan,
+                        selected: plan.id == _plan.id,
+                        onTap: () => _pick(plan),
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                    if (_plan.ttlOptions.isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      const Text('Срок хранения',
+                          style: TextStyle(color: TmpsColors.muted, fontSize: 13.5)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          for (final hours in _plan.ttlOptions)
+                            ChoiceChip(
+                              label: Text(hours < 24 ? '$hours ч' : _daysLabel(hours)),
+                              selected: _ttl == hours,
+                              onSelected: (_) => setState(() => _ttl = hours),
+                              backgroundColor: TmpsColors.surface2,
+                              selectedColor: TmpsColors.accent,
+                              labelStyle: TextStyle(
+                                color: _ttl == hours ? Colors.white : TmpsColors.text,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              side: const BorderSide(color: TmpsColors.border),
+                            ),
+                        ],
+                      ),
+                      if (_plan.maxLifetimeHours != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          _plan.extendable
+                              ? 'Продлить можно позже, суммарно до ${_hoursLabel(_plan.maxLifetimeHours!)} с момента создания.'
+                              : 'Этот тариф не продлевается.',
+                          style: const TextStyle(
+                              color: TmpsColors.muted, fontSize: 12.5, height: 1.4),
+                        ),
+                      ],
+                    ],
+                    const SizedBox(height: 18),
+                    TextField(
+                      controller: _title,
+                      maxLength: 64,
+                      decoration: const InputDecoration(
+                        labelText: 'Название, необязательно',
+                        counterText: '',
+                      ),
+                    ),
+                    if (widget.e2eeAvailable) ...[
+                      const SizedBox(height: 6),
+                      SwitchListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: _e2ee,
+                        onChanged: (v) => setState(() => _e2ee = v),
+                        title: const Text('Сквозное шифрование (E2EE)'),
+                        subtitle: const Text(
+                          'Файлы и их имена шифруются на устройстве.',
+                          style: TextStyle(color: TmpsColors.muted, fontSize: 13, height: 1.35),
+                        ),
+                      ),
+                      if (_e2ee)
+                        Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0x14FBBF24),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0x40FBBF24)),
+                          ),
+                          child: const Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              _E2eeWarning(icon: Ico.key, text: 'Ключ нельзя восстановить. Сохраните ссылку с ключом после создания.'),
+                              SizedBox(height: 9),
+                              _E2eeWarning(icon: Ico.eyeOff, text: 'Предпросмотр и скачивание архивом будут недоступны.'),
+                            ],
+                          ),
+                        ),
+                    ],
+                    const SizedBox(height: 8),
+                  ],
                 ),
-              ],
-            ],
-            const SizedBox(height: 18),
-            TextField(
-              controller: _title,
-              maxLength: 64,
-              decoration: const InputDecoration(
-                labelText: 'Название, необязательно',
-                counterText: '',
               ),
             ),
-            if (widget.e2eeAvailable) ...[
-              const SizedBox(height: 6),
-              SwitchListTile(
-                contentPadding: EdgeInsets.zero,
-                value: _e2ee,
-                onChanged: (v) => setState(() => _e2ee = v),
-                title: const Text('Сквозное шифрование (E2EE)'),
-                subtitle: const Text(
-                  'Файлы и имена шифруются на устройстве, сервер видит только шифртекст. Ключ есть только в ссылке: потеряете её, и данные не восстановить. Без предпросмотра и архивов.',
-                  style: TextStyle(color: TmpsColors.faint, fontSize: 12, height: 1.35),
-                ),
-              ),
-            ],
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
             FilledButton(
               onPressed: () => Navigator.of(context).pop(
                 _CreateRequest(
@@ -636,6 +708,33 @@ class _CreateSheetState extends State<_CreateSheet> {
     if (m10 == 1 && m100 != 11) return one;
     if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
     return many;
+  }
+}
+
+class _E2eeWarning extends StatelessWidget {
+  const _E2eeWarning({required this.icon, required this.text});
+
+  final String icon;
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 1),
+          child: TmpsIcon(icon, size: 18, color: TmpsColors.warn),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(color: TmpsColors.text, fontSize: 13, height: 1.35),
+          ),
+        ),
+      ],
+    );
   }
 }
 

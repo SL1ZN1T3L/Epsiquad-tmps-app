@@ -60,6 +60,8 @@ class AppProvider extends ChangeNotifier {
     final shouldRun = _stage == AppStage.ready && _tokens != null && !_autoLocked;
     if (shouldRun && _liveChannel == null) {
       _liveChannel = UserEvents(
+        baseUrl: api.baseUrl,
+        path: api.eventsPath,
         token: () => _tokens?.accessToken,
         onEvent: (type) {
           if (!_events.isClosed) _events.add(type);
@@ -386,13 +388,16 @@ class AppProvider extends ChangeNotifier {
         deviceName: _deviceName,
         appVersion: _appVersion,
       );
+      // Сначала сохраняем новый refresh token: даже сбой discovery не должен
+      // потерять уже выполненную серверную ротацию.
       await _store.writeRefreshToken(_tokens!.refreshToken);
+      await api.discover();
       _applyProfile(await auth.me());
       _notice = null;
       _stage = AppStage.ready;
       unawaited(checkForUpdate());
     } on ApiException catch (e) {
-      if (e.unauthorized) {
+      if (e.invalidatesSession) {
         await _store.clearRefreshToken();
         _tokens = null;
         _user = null;
@@ -406,9 +411,9 @@ class AppProvider extends ChangeNotifier {
         );
         _notice = e.message;
         _autoBiometricEnabled = false;
-        _stage = (_biometricEnabled && _biometricAvailable)
-            ? AppStage.locked
-            : AppStage.signedOut;
+        // Refresh token сохранён: временная ошибка не должна отправлять
+        // пользователя на форму входа. Следующая разблокировка повторит restore.
+        _stage = AppStage.locked;
       }
     }
     notifyListeners();
@@ -426,12 +431,22 @@ class AppProvider extends ChangeNotifier {
       );
       await _store.writeRefreshToken(_tokens!.refreshToken);
       return true;
-    } on ApiException {
-      await _store.clearRefreshToken();
-      _tokens = null;
-      _user = null;
-      _stage = AppStage.signedOut;
-      _notice = 'Сессия закончилась, войдите заново';
+    } on ApiException catch (e) {
+      if (e.invalidatesSession) {
+        await _store.clearRefreshToken();
+        _tokens = null;
+        _user = null;
+        _stage = AppStage.signedOut;
+        _notice = 'Сессия закончилась, войдите заново';
+      } else {
+        // Сеть, 429 и 5xx не доказывают, что refresh token недействителен.
+        _notice = e.message;
+        developer.log(
+          'Temporary token refresh failure',
+          name: 'tmps.auth',
+          error: e,
+        );
+      }
       notifyListeners();
       return false;
     }
@@ -468,6 +483,8 @@ class AppProvider extends ChangeNotifier {
   Future<void> signIn(LoginResult result) async {
     _tokens = result.tokens;
     _user = result.user;
+    // Только после успешной авторизации загружаем рабочий контракт API.
+    await api.discover();
     if (_store.unlocked) {
       await _store.writeRefreshToken(result.tokens.refreshToken);
       _stage = AppStage.ready;

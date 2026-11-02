@@ -184,7 +184,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               child: const Text('Отключить'),
             ),
             TextButton(
-              style: DialogActions.dangerStyle(ctx),
+              style: DialogActions.cancelStyle(ctx),
               onPressed: () => Navigator.of(ctx).pop(false),
               child: const Text('Отмена'),
             ),

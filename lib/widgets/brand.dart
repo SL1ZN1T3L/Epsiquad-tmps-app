@@ -19,9 +19,10 @@ class BrandMark extends StatelessWidget {
         borderRadius: BorderRadius.circular(size * 0.3),
         boxShadow: [
           BoxShadow(
-            color: const Color(0x737C6CFF),
-            blurRadius: size * 0.5,
-            offset: Offset(0, size * 0.18),
+            color: const Color(0x527C6CFF),
+            blurRadius: size * 0.42,
+            spreadRadius: -size * 0.08,
+            offset: Offset.zero,
           ),
         ],
       ),

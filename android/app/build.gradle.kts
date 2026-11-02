@@ -15,6 +15,15 @@ if (keystorePropertiesFile.exists()) {
     keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
+// Debug-сборки остаются доступны без keystore, но release никогда не должен
+// незаметно получить debug-подпись из-за отсутствующего key.properties.
+val releaseBuildRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true) || it == "build" || it == "assemble"
+}
+if (releaseBuildRequested && !keystorePropertiesFile.exists()) {
+    throw GradleException("Release signing requires android/key.properties")
+}
+
 extensions.configure<ApplicationExtension> {
     namespace = "com.epsiquad.tmps"
     compileSdk = 37

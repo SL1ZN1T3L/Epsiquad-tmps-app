@@ -150,7 +150,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
             const Text(
               'Файл скачивается с GitHub и сверяется с опубликованной контрольной суммой. Установку подтверждает система.',
               style:
-                  TextStyle(color: TmpsColors.faint, fontSize: 12, height: 1.4),
+                  TextStyle(color: TmpsColors.muted, fontSize: 12.5, height: 1.4),
             ),
           ],
         ],
@@ -182,7 +182,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
             child: const Text('Страница релиза'),
           ),
           TextButton(
-            style: DialogActions.dangerStyle(context),
+            style: DialogActions.cancelStyle(context),
             onPressed: busy ? null : () => Navigator.of(context).pop(),
             child: const Text('Закрыть'),
           ),

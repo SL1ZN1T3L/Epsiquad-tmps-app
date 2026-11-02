@@ -55,7 +55,7 @@ class StorageCard extends StatelessWidget {
                       const SizedBox(height: 2),
                       Text(
                         item.unlimited ? 'без срока' : 'до ${fmtDate(item.expiresAt)}',
-                        style: const TextStyle(fontSize: 11.5, color: TmpsColors.faint),
+                        style: const TextStyle(fontSize: 12.5, color: TmpsColors.muted),
                       ),
                     ],
                   ),
@@ -83,9 +83,9 @@ class StorageCard extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text('Занято ${fmtSize(item.usedBytes)}',
-                      style: const TextStyle(fontSize: 12.5, color: TmpsColors.muted)),
+                      style: const TextStyle(fontSize: 13, color: TmpsColors.muted)),
                   Text('свободно ${fmtSize(item.freeBytes)}',
-                      style: const TextStyle(fontSize: 12.5, color: TmpsColors.muted)),
+                      style: const TextStyle(fontSize: 13, color: TmpsColors.muted)),
                 ],
               ),
               const SizedBox(height: 7),
@@ -107,6 +107,57 @@ class StorageCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class StorageCardSkeleton extends StatelessWidget {
+  const StorageCardSkeleton({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return const Card(
+      child: Padding(
+        padding: EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Expanded(child: _Box(height: 17)),
+                SizedBox(width: 50),
+                _Box(width: 88, height: 15),
+              ],
+            ),
+            SizedBox(height: 20),
+            _Box(width: 230, height: 28, radius: 14),
+            SizedBox(height: 22),
+            _Box(height: 12),
+            SizedBox(height: 12),
+            _Box(height: 6, radius: 3),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _Box extends StatelessWidget {
+  const _Box({this.width, required this.height, this.radius = 6});
+
+  final double? width;
+  final double height;
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: width,
+      height: height,
+      decoration: BoxDecoration(
+        color: TmpsColors.surface2,
+        borderRadius: BorderRadius.circular(radius),
       ),
     );
   }

@@ -6,6 +6,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 
+/// Адрес нужен только для первого подключения, входа и обновления сессии.
+/// Авторизованные маршруты загружаются из OpenAPI после входа.
 const String kBaseUrl = 'https://tmps.epsiquad.com';
 const String kApiPrefix = '/api/v1';
 
@@ -18,6 +20,7 @@ class ApiException implements Exception {
 
   bool get unauthorized => status == 401;
   bool get notFound => status == 404;
+  bool get invalidatesSession => status == 401 || status == 403;
 
   @override
   String toString() => message;
@@ -31,6 +34,13 @@ http.Client _newClient() {
     ..connectionTimeout = const Duration(seconds: 10)
     ..idleTimeout = const Duration(seconds: 8);
   return IOClient(io);
+}
+
+class _ApiOperation {
+  const _ApiOperation(this.method, this.path);
+
+  final String method;
+  final String path;
 }
 
 class ApiClient {
@@ -48,10 +58,32 @@ class ApiClient {
   final bool _fixedClient;
   final TokenReader _accessToken;
   final TokenRefresher _refresh;
-  final String baseUrl;
+  String baseUrl;
 
   Future<bool>? _refreshing;
   bool _offline = false;
+  Map<String, _ApiOperation> _operations = const {};
+
+  /// Имена соответствуют функциям обработчиков серверного apiv1.py. FastAPI
+  /// добавляет к ним путь и метод в operationId, поэтому ищем уникальный префикс.
+  static const _requiredOperations = <String, String>{
+    'auth_logout': 'POST',
+    'me': 'GET',
+    'list_devices': 'GET',
+    'drop_device': 'DELETE',
+    'list_plans': 'GET',
+    'my_storages': 'GET',
+    'create_storage': 'POST',
+    'one_storage': 'GET',
+    'storage_token': 'POST',
+    'extend': 'POST',
+    'change_plan': 'POST',
+    'rename': 'PATCH',
+    'set_access': 'PATCH',
+    'set_password': 'POST',
+    'rotate': 'POST',
+    'delete_storage': 'DELETE',
+  };
 
   void close() => _client.close();
 
@@ -93,6 +125,92 @@ class ApiClient {
     return started;
   }
 
+  /// Загружает авторизованный контракт после login/refresh. Конечные точки
+  /// входа остаются bootstrap-маршрутами: без них невозможно получить сессию.
+  Future<void> discover() async {
+    final schema = await get('$kApiPrefix/openapi.json', auth: false);
+    final paths = schema['paths'];
+    if (paths is! Map) {
+      throw ApiException('Сервер вернул некорректное описание API');
+    }
+
+    final found = <String, _ApiOperation>{};
+    for (final entry in paths.entries) {
+      final path = entry.key;
+      final methods = entry.value;
+      if (path is! String || methods is! Map) continue;
+      for (final methodEntry in methods.entries) {
+        final method = methodEntry.key.toString().toUpperCase();
+        final operation = methodEntry.value;
+        if (operation is! Map) continue;
+        final id = operation['operationId'];
+        if (id is! String || id.isEmpty) continue;
+        for (final required in _requiredOperations.entries) {
+          if (id == required.key || id.startsWith('${required.key}_')) {
+            final existing = found[required.key];
+            if (existing != null &&
+                (existing.path != path || existing.method != method)) {
+              throw ApiException('Описание API содержит неоднозначную операцию ${required.key}');
+            }
+            found[required.key] = _ApiOperation(method, path);
+          }
+        }
+      }
+    }
+
+    for (final required in _requiredOperations.entries) {
+      final operation = found[required.key];
+      if (operation == null || operation.method != required.value) {
+        throw ApiException('API сервера несовместимо с приложением: ${required.key}');
+      }
+    }
+
+    // Если сервер объявляет canonical URL, используем его для дальнейших
+    // запросов. Старая версия без servers продолжает работать с bootstrap URL.
+    final servers = schema['servers'];
+    if (servers is List && servers.isNotEmpty) {
+      final first = servers.first;
+      final raw = first is Map ? first['url'] : null;
+      if (raw is String && raw.isNotEmpty) {
+        final resolved = Uri.parse(baseUrl).resolve(raw);
+        if (resolved.scheme == 'https' && resolved.host.isNotEmpty) {
+          baseUrl = resolved.origin;
+        }
+      }
+    }
+    _operations = found;
+  }
+
+  /// WebSocket не входит в OpenAPI: выводим его из корня уже проверенного API.
+  String get eventsPath {
+    final operation = _operations['me'];
+    if (operation == null) {
+      throw ApiException('API ещё не загружено, обновите сессию');
+    }
+    final slash = operation.path.lastIndexOf('/');
+    return '${operation.path.substring(0, slash)}/ws';
+  }
+
+  Future<Map<String, dynamic>> operation(
+    String name, {
+    Map<String, String>? parameters,
+    Map<String, dynamic>? body,
+    Map<String, String>? query,
+  }) {
+    final operation = _operations[name];
+    if (operation == null) {
+      throw ApiException('API ещё не загружено, обновите сессию');
+    }
+    var path = operation.path;
+    parameters?.forEach((key, value) {
+      path = path.replaceAll('{$key}', Uri.encodeComponent(value));
+    });
+    if (path.contains('{') || path.contains('}')) {
+      throw ApiException('Не удалось собрать адрес операции $name');
+    }
+    return request(operation.method, path, body: body, query: query);
+  }
+
   Future<Map<String, dynamic>> request(
     String method,
     String path, {
@@ -123,16 +241,23 @@ class ApiClient {
       }
     }
 
-    var response = await _sendOnce(send);
+    // Потерянный ответ не доказывает, что POST/PATCH/DELETE не выполнен.
+    // Поэтому автоматически повторяем только чтение; после refresh разрешён
+    // отдельный replay исходного запроса уже с новым access token.
+    final allowRetry = method == 'GET';
+    var response = await _sendOnce(send, allowRetry: allowRetry);
 
     if (response.statusCode == 401 && auth) {
       final ok = await _refreshOnce();
-      if (ok) response = await _sendOnce(send);
+      if (ok) response = await _sendOnce(send, allowRetry: allowRetry);
     }
     return _decode(response);
   }
 
-  Future<http.Response> _sendOnce(Future<http.Response> Function() send) async {
+  Future<http.Response> _sendOnce(
+    Future<http.Response> Function() send, {
+    required bool allowRetry,
+  }) async {
     try {
       return await send();
     } on TimeoutException catch (error, stackTrace) {
@@ -143,6 +268,9 @@ class ApiClient {
         stackTrace: stackTrace,
       );
       _resetConnections();
+      if (!allowRetry) {
+        throw ApiException('Сервер не ответил вовремя. Проверьте соединение');
+      }
     } on SocketException catch (error, stackTrace) {
       developer.log(
         'Network connection failed; resetting the HTTP connection',
@@ -151,6 +279,9 @@ class ApiClient {
         stackTrace: stackTrace,
       );
       _resetConnections();
+      if (!allowRetry) {
+        throw ApiException('Нет связи с сервером. Проверьте интернет');
+      }
     } on HttpException catch (error, stackTrace) {
       developer.log(
         'HTTP connection failed; resetting the HTTP connection',
@@ -159,6 +290,9 @@ class ApiClient {
         stackTrace: stackTrace,
       );
       _resetConnections();
+      if (!allowRetry) {
+        throw ApiException('Нет связи с сервером. Проверьте интернет');
+      }
     } catch (error, stackTrace) {
       developer.log(
         'Unexpected network error',

@@ -30,7 +30,7 @@ class DevModeMenu extends StatelessWidget {
               child: const Text('Скачать'),
             ),
             TextButton(
-              style: DialogActions.dangerStyle(context),
+              style: DialogActions.cancelStyle(context),
               onPressed: () => Navigator.pop(context),
               child: const Text('Закрыть'),
             ),
@@ -57,7 +57,7 @@ class DevModeMenu extends StatelessWidget {
               child: const Text('Отменить'),
             ),
             TextButton(
-              style: DialogActions.dangerStyle(context),
+              style: DialogActions.cancelStyle(context),
               onPressed: () => Navigator.pop(context),
               child: const Text('Нет'),
             ),
@@ -84,7 +84,7 @@ class DevModeMenu extends StatelessWidget {
         actions: [
           DialogActions(children: [
             TextButton(
-              style: DialogActions.dangerStyle(context),
+              style: DialogActions.cancelStyle(context),
               onPressed: () => Navigator.pop(context),
               child: const Text('Закрыть'),
             ),

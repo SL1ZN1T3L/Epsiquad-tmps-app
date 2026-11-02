@@ -20,9 +20,8 @@ import '../services/node_service.dart';
 import '../theme.dart';
 import '../widgets/dialog_actions.dart';
 import '../widgets/brand.dart';
-import '../widgets/download_panel.dart';
 import '../widgets/file_tile.dart';
-import '../widgets/upload_panel.dart';
+import '../widgets/transfers_panel.dart';
 import 'file_preview_screen.dart';
 
 class StorageScreen extends StatelessWidget {
@@ -103,7 +102,10 @@ class _StorageView extends StatelessWidget {
       _toast(
           context, 'Пропущено файлов: $skipped - не удалось определить размер');
     }
-    final total = sources.fold<int>(0, (sum, f) => sum + f.size);
+    final total = sources.fold<int>(
+      0,
+      (sum, f) => sum + provider.uploadWireSize(f.size),
+    );
     if (total > provider.freeBytes) {
       _toast(context,
           'Не хватает места: нужно ${fmtSize(total)}, свободно ${fmtSize(provider.freeBytes)}');
@@ -139,8 +141,10 @@ class _StorageView extends StatelessWidget {
 
   Future<void> _run(BuildContext context, Future<void> Function() action,
       String success) async {
+    final provider = context.read<StorageProvider>();
+    if (provider.operationRunning) return;
     try {
-      await action();
+      await provider.runOperation(action);
       if (context.mounted) _toast(context, success);
     } on ApiException catch (e) {
       if (context.mounted) _toast(context, e.message);
@@ -168,7 +172,7 @@ class _StorageView extends StatelessWidget {
             ),
       floatingActionButton: canWrite && !provider.selecting
           ? FloatingActionButton.extended(
-              onPressed: () => _pickFiles(context, provider),
+              onPressed: provider.operationRunning ? null : () => _pickFiles(context, provider),
               backgroundColor: TmpsColors.accent,
               foregroundColor: Colors.white,
               icon: const TmpsIcon(Ico.upload),
@@ -190,10 +194,9 @@ class _StorageView extends StatelessWidget {
             ],
             _actions(context, provider),
             const SizedBox(height: 12),
-            UploadPanel(provider: provider),
-            if (provider.uploads.isNotEmpty) const SizedBox(height: 12),
-            DownloadPanel(provider: provider),
-            if (provider.downloads.isNotEmpty) const SizedBox(height: 12),
+            TransfersPanel(provider: provider),
+            if (provider.uploads.isNotEmpty || provider.downloads.isNotEmpty)
+              const SizedBox(height: 12),
             if (provider.error != null) ...[
               _errorBox(provider.error!),
               const SizedBox(height: 12),
@@ -202,17 +205,31 @@ class _StorageView extends StatelessWidget {
             const SizedBox(height: 10),
             if (provider.loading && state == null)
               const Padding(
-                padding: EdgeInsets.symmetric(vertical: 40),
-                child: Center(
-                    child: CircularProgressIndicator(color: TmpsColors.accent)),
+                padding: EdgeInsets.only(top: 4),
+                child: Column(children: [
+                  FileTileSkeleton(),
+                  FileTileSkeleton(),
+                  FileTileSkeleton(),
+                ]),
               )
             else if (provider.files.isEmpty)
-              const Padding(
-                padding: EdgeInsets.only(top: 30),
+              Padding(
+                padding: const EdgeInsets.only(top: 24),
                 child: EmptyState(
                   icon: Ico.upload,
                   title: 'Файлов пока нет',
-                  subtitle: 'Нажмите «Загрузить» и выберите что отправить.',
+                  subtitle: canWrite
+                      ? 'Выберите файлы — они появятся здесь после загрузки.'
+                      : 'В этом хранилище пока нет доступных файлов.',
+                  action: canWrite
+                      ? FilledButton.icon(
+                          onPressed: provider.operationRunning
+                              ? null
+                              : () => _pickFiles(context, provider),
+                          icon: const TmpsIcon(Ico.upload, size: 19),
+                          label: const Text('Выбрать файлы'),
+                        )
+                      : null,
                 ),
               )
             else ...[
@@ -234,6 +251,10 @@ class _StorageView extends StatelessWidget {
                     stats: state?.stats[file.name],
                     showStats: state?.isOwner ?? false,
                     canDelete: canWrite,
+                    thumbnailUri: !provider.e2ee && file.kind == 'image'
+                        ? provider.fileUri(file, download: false)
+                        : null,
+                    thumbnailHeaders: provider.ownerHeaders,
                     selecting: provider.selecting,
                     selected: provider.isSelected(file.name),
                     onOpen: () => _openPreview(context, provider, file),
@@ -366,6 +387,7 @@ class _StorageView extends StatelessWidget {
               child: const Text('Поделиться ссылкой'),
             ),
             TextButton(
+              style: DialogActions.cancelStyle(ctx),
               onPressed: () => Navigator.of(ctx).pop(),
               child: const Text('Закрыть'),
             ),
@@ -388,15 +410,16 @@ class _StorageView extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                     color: TmpsColors.surface2,
                     borderRadius: BorderRadius.circular(99),
-                    border: Border.all(color: TmpsColors.border),
                   ),
                   child: Text(
                     item.code,
@@ -407,21 +430,17 @@ class _StorageView extends StatelessWidget {
                     ),
                   ),
                 ),
-                const SizedBox(width: 8),
-                Text('${item.planName} · ${fmtSize(item.quotaBytes)}',
-                    style:
-                        const TextStyle(color: TmpsColors.muted, fontSize: 13)),
-                if (provider.e2ee) ...[
-                  const SizedBox(width: 8),
+                Text(
+                  '${item.planName} · ${fmtSize(item.quotaBytes)}',
+                  style: const TextStyle(color: TmpsColors.muted, fontSize: 13.5),
+                ),
+                if (provider.e2ee)
                   _StatusChip(
                     text: provider.e2eeNeedsKey ? 'E2EE · нужен ключ' : 'E2EE · зашифровано',
                     color: provider.e2eeNeedsKey ? TmpsColors.warn : TmpsColors.ok,
                   ),
-                ],
-                if (item.hasPassword) ...[
-                  const SizedBox(width: 8),
+                if (item.hasPassword)
                   const _StatusChip(text: 'пароль', color: TmpsColors.muted),
-                ],
               ],
             ),
             const SizedBox(height: 14),
@@ -445,13 +464,11 @@ class _StorageView extends StatelessWidget {
                     ),
                   ),
                   IconButton(
-                    visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.qr, size: 19),
                     tooltip: 'QR-код',
                     onPressed: () => _showQr(context, item, provider.shareUrl),
                   ),
                   IconButton(
-                    visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.copy, size: 19),
                     tooltip: 'Копировать',
                     onPressed: () async {
@@ -462,14 +479,12 @@ class _StorageView extends StatelessWidget {
                     },
                   ),
                   IconButton(
-                    visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.share, size: 19),
                     tooltip: 'Поделиться',
                     onPressed: () =>
                         SharePlus.instance.share(ShareParams(text: provider.shareUrl)),
                   ),
                   IconButton(
-                    visualDensity: VisualDensity.compact,
                     icon: const TmpsIcon(Ico.external, size: 19),
                     tooltip: 'Открыть в браузере',
                     onPressed: () => launchUrl(Uri.parse(provider.shareUrl),
@@ -596,17 +611,34 @@ class _StorageView extends StatelessWidget {
       ),
     ];
 
-    return LayoutBuilder(
-      builder: (context, box) {
-        const columns = 3;
-        const gap = 8.0;
-        final width = (box.maxWidth - gap * (columns - 1)) / columns;
-        return Wrap(
-          spacing: gap,
-          runSpacing: gap,
-          children: [for (final b in buttons) SizedBox(width: width, child: b)],
-        );
-      },
+    return Column(
+      children: [
+        if (provider.operationRunning) ...[
+          const ClipRRect(
+            borderRadius: BorderRadius.all(Radius.circular(99)),
+            child: LinearProgressIndicator(minHeight: 4),
+          ),
+          const SizedBox(height: 8),
+        ],
+        IgnorePointer(
+          ignoring: provider.operationRunning,
+          child: Opacity(
+            opacity: provider.operationRunning ? 0.55 : 1,
+            child: LayoutBuilder(
+              builder: (context, box) {
+                const columns = 3;
+                const gap = 8.0;
+                final width = (box.maxWidth - gap * (columns - 1)) / columns;
+                return Wrap(
+                  spacing: gap,
+                  runSpacing: gap,
+                  children: [for (final b in buttons) SizedBox(width: width, child: b)],
+                );
+              },
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -650,7 +682,8 @@ class _StorageView extends StatelessWidget {
       String name, String title) async {
     final ok = await _confirm(context,
         title: 'Удалить «$title»?',
-        text: 'Файл исчезнет у всех, у кого есть ссылка.');
+        text: 'Файл исчезнет у всех, у кого есть ссылка.',
+        danger: true);
     if (!ok || !context.mounted) return;
     await _run(context, () => provider.deleteFiles([name]), 'Файл удалён');
   }
@@ -819,7 +852,11 @@ Future<_PasswordChoice?> _askPassword(BuildContext context, bool hasPassword) as
               onPressed: () => Navigator.of(ctx).pop(const _PasswordChoice(null)),
               child: const Text('Убрать пароль'),
             ),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Отмена')),
+          TextButton(
+            style: DialogActions.cancelStyle(ctx),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Отмена'),
+          ),
         ]),
       ],
     ),
@@ -857,7 +894,11 @@ Future<void> _askE2eeKey(BuildContext context, StorageProvider provider) async {
             onPressed: () => Navigator.of(ctx).pop(controller.text),
             child: const Text('Расшифровать'),
           ),
-          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Отмена')),
+          TextButton(
+            style: DialogActions.cancelStyle(ctx),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Отмена'),
+          ),
         ]),
       ],
     ),
@@ -991,8 +1032,8 @@ class _ActionButton extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(14),
         child: Container(
-          height: 68,
-          padding: const EdgeInsets.symmetric(horizontal: 6),
+          constraints: const BoxConstraints(minHeight: 68),
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
@@ -1007,10 +1048,11 @@ class _ActionButton extends StatelessWidget {
               const SizedBox(height: 6),
               Text(
                 label,
-                maxLines: 1,
+                maxLines: 2,
                 overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
                 style: TextStyle(
-                    fontSize: 12.5, fontWeight: FontWeight.w600, color: color),
+                    fontSize: 12.5, fontWeight: FontWeight.w600, color: color, height: 1.2),
               ),
             ],
           ),
@@ -1043,7 +1085,7 @@ class _Stat extends StatelessWidget {
         if (sub != null) ...[
           const SizedBox(height: 2),
           Text(sub!,
-              style: const TextStyle(color: TmpsColors.faint, fontSize: 12)),
+              style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5)),
         ],
       ],
     );
@@ -1075,8 +1117,10 @@ Future<bool> _confirm(BuildContext context,
               child: const Text('Продолжить'),
             ),
           TextButton(
-              onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Отмена')),
+            style: DialogActions.cancelStyle(ctx),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Отмена'),
+          ),
         ]),
       ],
     ),
@@ -1100,8 +1144,10 @@ Future<String?> _prompt(
             child: const Text('Сохранить'),
           ),
           TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('Отмена')),
+            style: DialogActions.cancelStyle(ctx),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Отмена'),
+          ),
         ]),
       ],
     ),

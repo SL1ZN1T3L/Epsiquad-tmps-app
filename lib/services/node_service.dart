@@ -10,21 +10,34 @@ import '../models/storage_file.dart';
 import 'api_client.dart';
 
 class NodeService {
-  NodeService({http.Client? client, this.baseUrl = kBaseUrl})
-      : _client = client ?? http.Client();
+  NodeService({http.Client? client}) : _client = client ?? http.Client();
 
   final http.Client _client;
-  final String baseUrl;
 
   void close() => _client.close();
 
-  Uri _uri(String code, String path, [Map<String, String>? query]) {
+  Uri _uriFromBase(
+    String baseUrl,
+    String path, [
+    Map<String, String>? query,
+  ]) {
     final base = Uri.parse(baseUrl);
+    if (!base.hasScheme || base.host.isEmpty) {
+      throw ApiException('Сервер не вернул адрес хранилища');
+    }
+    final root = base.path.endsWith('/')
+        ? base.path.substring(0, base.path.length - 1)
+        : base.path;
     return base.replace(
-      path: '/$code$path',
+      path: '$root$path',
       queryParameters: query == null || query.isEmpty ? null : query,
+      fragment: '',
     );
   }
+
+  /// Адрес ноды не зашит в приложении: сервер выдаёт его в owner grant.
+  Uri _uri(OwnerGrant grant, String path, [Map<String, String>? query]) =>
+      _uriFromBase(grant.baseUrl, path, query);
 
   Map<String, String> _headers(OwnerGrant grant, {String? contentType}) {
     final headers = <String, String>{
@@ -71,7 +84,7 @@ class NodeService {
   Future<StorageState> state(String code, OwnerGrant grant) {
     return _guard(() async {
       final response = await _client
-          .get(_uri(code, '/api/state'), headers: _headers(grant))
+          .get(_uri(grant, '/api/state'), headers: _headers(grant))
           .timeout(const Duration(seconds: 20));
       return StorageState.fromJson(_decode(response));
     });
@@ -81,7 +94,7 @@ class NodeService {
     return _guard(() async {
       final response = await _client
           .post(
-            _uri(code, '/api/upload'),
+            _uri(grant, '/api/upload'),
             headers: _headers(grant, contentType: 'application/json; charset=utf-8'),
             body: jsonEncode({'name': name, 'size': size}),
           )
@@ -94,7 +107,7 @@ class NodeService {
     try {
       return await _guard(() async {
         final response = await _client
-            .get(_uri(code, '/api/upload/$uid'), headers: _headers(grant))
+            .get(_uri(grant, '/api/upload/$uid'), headers: _headers(grant))
             .timeout(const Duration(seconds: 20));
         return UploadSession.fromJson(_decode(response));
       });
@@ -116,7 +129,7 @@ class NodeService {
     return _guard(() async {
       final request = http.AbortableRequest(
         'PUT',
-        _uri(code, '/api/upload/$uid/$index'),
+        _uri(grant, '/api/upload/$uid/$index'),
         abortTrigger: abort,
       )
         ..headers.addAll(_headers(grant, contentType: 'application/octet-stream'))
@@ -130,7 +143,7 @@ class NodeService {
   Future<void> completeUpload(String code, OwnerGrant grant, String uid) {
     return _guard(() async {
       final response = await _client
-          .post(_uri(code, '/api/upload/$uid/complete'), headers: _headers(grant))
+          .post(_uri(grant, '/api/upload/$uid/complete'), headers: _headers(grant))
           .timeout(const Duration(minutes: 2));
       _decode(response);
     });
@@ -140,7 +153,7 @@ class NodeService {
     try {
       await _guard(() async {
         final response = await _client
-            .delete(_uri(code, '/api/upload/$uid'), headers: _headers(grant))
+            .delete(_uri(grant, '/api/upload/$uid'), headers: _headers(grant))
             .timeout(const Duration(seconds: 20));
         _decode(response);
       });
@@ -151,7 +164,7 @@ class NodeService {
     return _guard(() async {
       final response = await _client
           .post(
-            _uri(code, '/api/delete'),
+            _uri(grant, '/api/delete'),
             headers: _headers(grant, contentType: 'application/json; charset=utf-8'),
             body: jsonEncode({'names': names}),
           )
@@ -161,20 +174,16 @@ class NodeService {
     });
   }
 
-  Uri fileUri(String code, String name, {bool download = true}) {
-    return _uri(code, '/f/$name', download ? const {'dl': '1'} : null);
-  }
+  Uri fileUri(String baseUrl, String name, {bool download = true}) =>
+      _uriFromBase(baseUrl, '/f/$name', download ? const {'dl': '1'} : null);
 
-  Uri archiveUri(String code) => _uri(code, '/api/zip/all');
+  Uri archiveUri(String baseUrl) => _uriFromBase(baseUrl, '/api/zip/all');
 
   WebSocketChannel watch(String code, OwnerGrant grant) {
-    final base = Uri.parse(baseUrl);
-    final uri = base.replace(
-      scheme: base.scheme == 'https' ? 'wss' : 'ws',
-      path: '/$code/ws',
-    );
+    final uri = _uri(grant, '/ws');
+    final socket = uri.replace(scheme: uri.scheme == 'https' ? 'wss' : 'ws');
     return IOWebSocketChannel.connect(
-      uri,
+      socket,
       headers: {grant.header: grant.token},
       pingInterval: const Duration(seconds: 30),
       connectTimeout: const Duration(seconds: 15),

@@ -169,6 +169,11 @@ class UploadTask {
   String? uid;
   String? error;
 
+  /// Если ответ complete потерян, сначала проверяем этот объект в хранилище,
+  /// а не создаём второй upload с теми же данными.
+  String? wireName;
+  bool completionUncertain = false;
+
   Completer<void> _abort = Completer<void>();
 
   /// Сигнал для текущего запроса: по нему отправка куска обрывается сразу.
@@ -211,6 +216,7 @@ class StorageProvider extends ChangeNotifier {
   StorageState? _state;
   OwnerGrant? _grant;
   bool _loading = false;
+  bool _operationRunning = false;
   String? _error;
   bool _disposed = false;
 
@@ -236,6 +242,7 @@ class StorageProvider extends ChangeNotifier {
   StorageItem get item => _item;
   StorageState? get state => _state;
   bool get loading => _loading;
+  bool get operationRunning => _operationRunning;
   String? get error => _error;
   List<UploadTask> get uploads => List.unmodifiable(_uploads);
   List<FileDownload> get downloads => List.unmodifiable(_downloads);
@@ -445,6 +452,34 @@ class StorageProvider extends ChangeNotifier {
   int get quotaBytes => _state?.quotaBytes ?? _item.quotaBytes;
   int get freeBytes => max(0, quotaBytes - usedBytes);
 
+  String get _storageBaseUrl => _grant?.baseUrl ?? _item.url;
+
+  /// Заголовки для миниатюр изображений. null, пока ключ владельца не получен.
+  Map<String, String>? get ownerHeaders {
+    final grant = _grant;
+    return grant == null ? null : _node.ownerHeaders(grant);
+  }
+
+  /// Размер, который реально займёт файл в квоте хранилища.
+  int uploadWireSize(int plainSize) {
+    if (!e2ee) return plainSize;
+    final chunk = _state?.chunkSize ?? 8 * 1024 * 1024;
+    return E2ee.encryptedSize(plainSize, chunk);
+  }
+
+  /// Не даёт запустить две операции управления хранилищем одновременно.
+  Future<void> runOperation(Future<void> Function() action) async {
+    if (_operationRunning || _disposed) return;
+    _operationRunning = true;
+    _ping();
+    try {
+      await action();
+    } finally {
+      _operationRunning = false;
+      _ping();
+    }
+  }
+
   void _ping() {
     if (!_disposed) notifyListeners();
   }
@@ -494,7 +529,7 @@ class StorageProvider extends ChangeNotifier {
   }
 
   Uri fileUri(StorageFile file, {bool download = true}) =>
-      _node.fileUri(_item.code, file.name, download: download);
+      _node.fileUri(_storageBaseUrl, file.name, download: download);
 
   /// Заголовки владельца для предпросмотра файла по ссылке.
   /// [refresh] запрашивает новый ключ, если прежний перестал подходить.
@@ -505,7 +540,7 @@ class StorageProvider extends ChangeNotifier {
 
   Future<void> download(StorageFile file) {
     if (!e2ee) {
-      return _startDownload(file.name, () => _node.fileUri(_item.code, file.name));
+      return _startDownload(file.name, () => _node.fileUri(_storageBaseUrl, file.name));
     }
     final key = _e2eeKey;
     final chunk = file.chunkSize;
@@ -513,7 +548,7 @@ class StorageProvider extends ChangeNotifier {
       final failed = FileDownload(
         id: '${DateTime.now().microsecondsSinceEpoch}-${_downloads.length}',
         name: file.title,
-        build: () => _node.fileUri(_item.code, file.name),
+        build: () => _node.fileUri(_storageBaseUrl, file.name),
         allowPause: false,
       )
         ..canPause = false
@@ -524,7 +559,7 @@ class StorageProvider extends ChangeNotifier {
     }
     return _startDownload(
       file.title,
-      () => _node.fileUri(_item.code, file.name),
+      () => _node.fileUri(_storageBaseUrl, file.name),
       cipherName: file.name,
       decrypt: E2eeDownload(key: key, fileId: file.name, chunkSize: chunk, saveAs: file.title),
     );
@@ -533,7 +568,7 @@ class StorageProvider extends ChangeNotifier {
   Future<void> downloadArchive() {
     return _startDownload(
       'tmps-${_item.code}.zip',
-      () => _node.archiveUri(_item.code),
+      () => _node.archiveUri(_storageBaseUrl),
       allowPause: false,
     );
   }
@@ -801,6 +836,38 @@ class StorageProvider extends ChangeNotifier {
     }
   }
 
+  /// Возвращает true, если неясный complete обработан и новый upload создавать
+  /// нельзя. Успешное завершение удаляет upload UID на сервере, поэтому 404
+  /// после потерянного ответа сам по себе не означает, что файла нет.
+  Future<bool> _resolveUncertainCompletion(UploadTask task) async {
+    if (!task.completionUncertain) return false;
+    final wireName = task.wireName;
+    if (wireName == null || wireName.isEmpty) {
+      task.status = UploadStatus.error;
+      task.error = 'Проверьте список файлов перед повторной загрузкой';
+      _ping();
+      return true;
+    }
+
+    final fresh = await _withGrant((grant) => _node.state(_item.code, grant));
+    _state = fresh;
+    await _prepareE2ee();
+    if (fresh.files.any((file) => file.name == wireName)) {
+      task.status = UploadStatus.done;
+      task.sentBytes = task.size;
+      task.error = null;
+      task.completionUncertain = false;
+    } else {
+      // Имя могло быть изменено сервером из-за конфликта. Не угадываем его и
+      // не создаём дубликат: пользователь сначала видит актуальный список.
+      task.status = UploadStatus.error;
+      task.error = 'Результат загрузки не подтверждён. Проверьте список файлов; '
+          'для новой попытки удалите эту задачу и выберите файл заново';
+    }
+    _ping();
+    return true;
+  }
+
   Future<void> _runTask(UploadTask task) async {
     final key = _e2eeKey;
     if (e2ee && key == null) {
@@ -828,9 +895,16 @@ class StorageProvider extends ChangeNotifier {
       final resumed = startedUid == null
           ? null
           : await _withGrant((grant) => _node.uploadState(_item.code, grant, startedUid));
+      if (startedUid != null &&
+          resumed == null &&
+          await _resolveUncertainCompletion(task)) {
+        return;
+      }
       UploadSession session = resumed ??
           await _withGrant((grant) async =>
               _node.initUpload(_item.code, grant, await wireName(), wireSize));
+      task.wireName = session.name;
+      task.completionUncertain = false;
       if (key != null) _checkWire(session, wireChunk, task.size);
       task.uid = session.uid;
 
@@ -888,6 +962,8 @@ class StorageProvider extends ChangeNotifier {
           );
           if (key != null) _checkWire(session, wireChunk, task.size);
           task.uid = session.uid;
+          task.wireName = session.name;
+          task.completionUncertain = false;
           received = session.received;
           task.sentBytes = 0;
           index = -1;
@@ -902,9 +978,22 @@ class StorageProvider extends ChangeNotifier {
 
       if (task.status != UploadStatus.uploading) return;
       final finalUid = session.uid;
-      await _withGrant((grant) => _node.completeUpload(_item.code, grant, finalUid));
+      try {
+        await _withGrant((grant) => _node.completeUpload(_item.code, grant, finalUid));
+      } on ApiException catch (e) {
+        if (e.status == 0 || e.status >= 500) {
+          task.completionUncertain = true;
+          task.wireName = session.name;
+          throw ApiException(
+            'Связь оборвалась при завершении. Повторите: приложение сначала проверит, '
+            'не появился ли файл в хранилище',
+          );
+        }
+        rethrow;
+      }
       task.status = UploadStatus.done;
       task.sentBytes = task.size;
+      task.completionUncertain = false;
     } on ApiException catch (e) {
       task.status = UploadStatus.error;
       task.error = e.message;

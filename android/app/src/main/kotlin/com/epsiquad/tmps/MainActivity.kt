@@ -25,6 +25,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import kotlin.math.floor
+import kotlin.math.min
+import kotlin.math.sqrt
 
 class MainActivity : FlutterFragmentActivity() {
     // PdfRenderer не потокобезопасен и держит открытой одну страницу за раз,
@@ -47,7 +50,15 @@ class MainActivity : FlutterFragmentActivity() {
         const val KEY_TASK = "com.bbflight.background_downloader.task"
         const val KEY_NOTIFICATION_TYPE = "com.bbflight.background_downloader.notificationType"
         const val NOTIFICATION_COMPLETE = 1 // порядковый номер NotificationType.complete
+
+        const val MAX_SHARE_ITEMS = 50
+        const val MAX_SHARE_FILE_BYTES = 20L * 1024 * 1024 * 1024
+        const val MAX_SHARE_TOTAL_BYTES = 20L * 1024 * 1024 * 1024
+        const val MAX_SHARE_TEXT_BYTES = 1024 * 1024
+        const val SHARE_SPACE_RESERVE = 256L * 1024 * 1024
     }
+
+    private class ShareLimitException(message: String) : Exception(message)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,30 +107,63 @@ class MainActivity : FlutterFragmentActivity() {
 
         shareWorker.execute {
             val items = ArrayList<Map<String, Any>>()
+            var shareError: String? = if (uris.size > MAX_SHARE_ITEMS) {
+                "Принято только $MAX_SHARE_ITEMS файлов: остальные пропущены"
+            } else {
+                null
+            }
             try {
                 val root = File(cacheDir, "shared")
                 cleanOldShares(root)
                 val dir = File(root, System.currentTimeMillis().toString())
                 dir.mkdirs()
-                for (uri in uris) {
+                var totalBytes = 0L
+                for (uri in uris.take(MAX_SHARE_ITEMS)) {
                     try {
-                        copyShared(uri, dir)?.let { items.add(it) }
+                        val remaining = MAX_SHARE_TOTAL_BYTES - totalBytes
+                        val usable = (dir.usableSpace - SHARE_SPACE_RESERVE).coerceAtLeast(0L)
+                        val limit = minOf(MAX_SHARE_FILE_BYTES, remaining, usable)
+                        if (limit <= 0L) {
+                            throw ShareLimitException("Недостаточно свободного места для присланных файлов")
+                        }
+                        val copied = copyShared(uri, dir, limit)
+                        if (copied != null) {
+                            totalBytes += copied.second
+                            items.add(copied.first)
+                        }
+                    } catch (e: ShareLimitException) {
+                        shareError = e.message
+                        break
                     } catch (e: Exception) {
                         // пропускаем файл, который не удалось прочитать
                     }
                 }
                 if (uris.isEmpty() && !text.isNullOrEmpty()) {
+                    val bytes = text.toByteArray(Charsets.UTF_8)
+                    if (bytes.size > MAX_SHARE_TEXT_BYTES) {
+                        throw ShareLimitException("Присланный текст слишком большой")
+                    }
+                    if (dir.usableSpace - SHARE_SPACE_RESERVE < bytes.size) {
+                        throw ShareLimitException("Недостаточно свободного места для присланного текста")
+                    }
                     val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
                     val file = File(dir, "text-$stamp.txt")
-                    file.writeText(text, Charsets.UTF_8)
+                    file.writeBytes(bytes)
                     items.add(mapOf("name" to file.name, "size" to file.length(), "path" to file.absolutePath))
                 }
+            } catch (e: ShareLimitException) {
+                shareError = e.message
             } catch (e: Exception) {
                 // оставим то, что успели скопировать
             }
             runOnUiThread {
+                shareError?.let {
+                    Toast.makeText(this, it, Toast.LENGTH_LONG).show()
+                }
                 if (items.isEmpty()) {
-                    Toast.makeText(this, "Не удалось прочитать присланные файлы", Toast.LENGTH_LONG).show()
+                    if (shareError == null) {
+                        Toast.makeText(this, "Не удалось прочитать присланные файлы", Toast.LENGTH_LONG).show()
+                    }
                 } else if (shareDartReady) {
                     shareChannel?.invokeMethod("shared", items)
                 } else {
@@ -177,11 +221,31 @@ class MainActivity : FlutterFragmentActivity() {
         return if (clean.isEmpty()) "file" else clean
     }
 
-    private fun copyShared(uri: Uri, dir: File): Map<String, Any>? {
+    private fun copyShared(uri: Uri, dir: File, maxBytes: Long): Pair<Map<String, Any>, Long>? {
         val target = File(dir, displayName(uri))
         val input = contentResolver.openInputStream(uri) ?: return null
-        input.use { source -> target.outputStream().use { out -> source.copyTo(out) } }
-        return mapOf("name" to target.name, "size" to target.length(), "path" to target.absolutePath)
+        try {
+            input.use { source ->
+                target.outputStream().use { out ->
+                    val buffer = ByteArray(128 * 1024)
+                    var written = 0L
+                    while (true) {
+                        val count = source.read(buffer)
+                        if (count < 0) break
+                        written += count
+                        if (written > maxBytes) {
+                            throw ShareLimitException("Присланный файл слишком большой или превышен общий лимит")
+                        }
+                        out.write(buffer, 0, count)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            target.delete()
+            throw e
+        }
+        val size = target.length()
+        return mapOf("name" to target.name, "size" to size, "path" to target.absolutePath) to size
     }
 
     /** Удаляем копии старше трёх суток, чтобы кэш не рос. */
@@ -427,17 +491,35 @@ class MainActivity : FlutterFragmentActivity() {
 
     private fun renderPdfPage(index: Int, requestedWidth: Int): ByteArray {
         val renderer = pdfRenderer ?: throw IllegalStateException("PDF is not opened")
+        if (index !in 0 until renderer.pageCount) throw IllegalArgumentException("Invalid PDF page")
         val page = renderer.openPage(index)
         try {
-            val width = requestedWidth.coerceIn(200, 3000)
-            val height = (width.toLong() * page.height / page.width).toInt().coerceAtLeast(1)
+            if (page.width <= 0 || page.height <= 0) {
+                throw IllegalArgumentException("Invalid PDF page dimensions")
+            }
+
+            val maxHeight = 12_000.0
+            val maxPixels = 16_000_000.0
+            val initialWidth = requestedWidth.coerceIn(200, 3000)
+            val initialHeight = (initialWidth.toLong() * page.height / page.width)
+                .coerceAtLeast(1L)
+                .toDouble()
+            val scale = min(
+                1.0,
+                min(maxHeight / initialHeight, sqrt(maxPixels / (initialWidth * initialHeight)))
+            )
+            val width = floor(initialWidth * scale).toInt().coerceIn(1, 3000)
+            val height = floor(initialHeight * scale).toInt().coerceIn(1, 12_000)
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            bitmap.eraseColor(Color.WHITE)
-            page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            val out = ByteArrayOutputStream()
-            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
-            bitmap.recycle()
-            return out.toByteArray()
+            try {
+                bitmap.eraseColor(Color.WHITE)
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                val out = ByteArrayOutputStream()
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out)
+                return out.toByteArray()
+            } finally {
+                bitmap.recycle()
+            }
         } finally {
             page.close()
         }

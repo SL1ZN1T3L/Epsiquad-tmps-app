@@ -4,9 +4,7 @@ import 'dart:convert';
 import 'package:web_socket_channel/io.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-import 'api_client.dart';
-
-/// Канал событий аккаунта (`/api/v1/ws`): сервер сообщает, что в других клиентах (сайт, другое устройство)
+/// Канал событий аккаунта по пути из OpenAPI: сервер сообщает, что в других клиентах (сайт, другое устройство)
 /// изменились хранилища, устройства или аккаунт. Само событие - только сигнал, данные перечитываются обычным API.
 ///
 /// Канал сам переподключается с нарастающей паузой. Токен доступа живёт недолго: сервер закрывает канал, когда
@@ -17,7 +15,8 @@ class UserEvents {
     required this.onEvent,
     this.onReconnect,
     this.ensureToken,
-    this.baseUrl = kBaseUrl,
+    required this.baseUrl,
+    required this.path,
   });
 
   /// Текущий токен доступа.
@@ -33,6 +32,7 @@ class UserEvents {
   final Future<void> Function()? ensureToken;
 
   final String baseUrl;
+  final String path;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _subscription;
@@ -71,7 +71,7 @@ class UserEvents {
       return;
     }
     final base = Uri.parse(baseUrl);
-    final uri = base.replace(scheme: base.scheme == 'https' ? 'wss' : 'ws', path: '$kApiPrefix/ws');
+    final uri = base.replace(scheme: base.scheme == 'https' ? 'wss' : 'ws', path: path);
     try {
       final channel = IOWebSocketChannel.connect(
         uri,

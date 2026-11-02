@@ -9,6 +9,13 @@ class DialogActions extends StatelessWidget {
 
   static ButtonStyle primaryStyle(BuildContext context) => const ButtonStyle();
 
+  static ButtonStyle cancelStyle(BuildContext context) => TextButton.styleFrom(
+        foregroundColor: TmpsColors.muted,
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+        minimumSize: const Size.fromHeight(52),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      );
+
   static ButtonStyle dangerStyle(BuildContext context) => TextButton.styleFrom(
         foregroundColor: TmpsColors.dangerSoft,
         side: const BorderSide(color: TmpsColors.dangerSoft, width: 1.4),

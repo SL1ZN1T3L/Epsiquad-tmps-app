@@ -26,7 +26,7 @@ class UploadPanel extends StatelessWidget {
               child: const Text('Отменить всё'),
             ),
             TextButton(
-              style: DialogActions.dangerStyle(ctx),
+              style: DialogActions.cancelStyle(ctx),
               onPressed: () => Navigator.pop(ctx, false),
               child: const Text('Нет'),
             ),

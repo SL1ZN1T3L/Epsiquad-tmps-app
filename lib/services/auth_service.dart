@@ -113,19 +113,20 @@ class AuthService {
     return TokenPair.fromJson(data);
   }
 
-  Future<void> logout() => _api.post('$kApiPrefix/auth/logout');
+  Future<void> logout() => _api.operation('auth_logout');
 
   Future<Profile> me() async {
-    final data = await _api.get('$kApiPrefix/me');
+    final data = await _api.operation('me');
     return Profile.fromJson(data);
   }
 
   Future<List<DeviceEntry>> devices() async {
-    final data = await _api.get('$kApiPrefix/devices');
+    final data = await _api.operation('list_devices');
     return ((data['devices'] as List?) ?? const [])
         .map((e) => DeviceEntry.fromJson(e as Map<String, dynamic>))
         .toList(growable: false);
   }
 
-  Future<void> revokeDevice(int id) => _api.delete('$kApiPrefix/devices/$id');
+  Future<void> revokeDevice(int id) =>
+      _api.operation('drop_device', parameters: {'device_pk': '$id'});
 }
