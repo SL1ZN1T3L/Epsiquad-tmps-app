@@ -1,5 +1,6 @@
 import 'dart:async';
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -38,9 +39,23 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   void _fail(Object error) {
+    if (!mounted) return;
     setState(() {
       _error = error is ApiException ? error.message : 'Что-то пошло не так';
       _busy = false;
+    });
+  }
+
+  Future<void> _retryConfig() async {
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final ok = await context.read<AppProvider>().refreshConfig();
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      if (!ok) _error = 'Настройки сервера недоступны';
     });
   }
 
@@ -52,7 +67,8 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     final app = context.read<AppProvider>();
     try {
-      final result = await app.loginWithPassword(_login.text.trim(), _password.text);
+      final result =
+          await app.loginWithPassword(_login.text.trim(), _password.text);
       await app.signIn(result);
     } catch (e) {
       _fail(e);
@@ -69,7 +85,8 @@ class _LoginScreenState extends State<LoginScreen> {
       final login = await app.telegramStart();
       if (!mounted) return;
       setState(() => _tgLogin = login);
-      await launchUrl(Uri.parse(login.url), mode: LaunchMode.externalApplication);
+      await launchUrl(Uri.parse(login.url),
+          mode: LaunchMode.externalApplication);
       _startPolling(login);
     } catch (e) {
       _fail(e);
@@ -134,7 +151,10 @@ class _LoginScreenState extends State<LoginScreen> {
               const Text(
                 'Вход',
                 textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800, letterSpacing: -0.8),
+                style: TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.8),
               ),
               const SizedBox(height: 8),
               const Text(
@@ -143,7 +163,10 @@ class _LoginScreenState extends State<LoginScreen> {
                 style: TextStyle(color: TmpsColors.muted, height: 1.45),
               ),
               const SizedBox(height: 28),
-              if (waiting) _telegramWaiting() else _passwordForm(config?.telegramAvailable ?? false),
+              if (waiting)
+                _telegramWaiting()
+              else
+                _passwordForm(config?.telegramAvailable ?? false),
               if (_error != null) ...[
                 const SizedBox(height: 16),
                 _errorBox(_error!),
@@ -156,11 +179,20 @@ class _LoginScreenState extends State<LoginScreen> {
                   style: const TextStyle(color: TmpsColors.warn),
                 ),
               ],
+              if (config == null)
+                TextButton.icon(
+                  onPressed: _busy ? null : _retryConfig,
+                  icon: const TmpsIcon(Ico.refresh, size: 18),
+                  label: const Text('Повторить получение настроек'),
+                ),
               const SizedBox(height: 28),
               Center(
                 child: Text(
-                  config == null ? 'tmps' : 'tmps · сервер ${config.serverVersion}',
-                  style: const TextStyle(color: TmpsColors.faint, fontSize: 12.5),
+                  config == null
+                      ? 'tmps'
+                      : 'tmps · сервер ${config.serverVersion}',
+                  style:
+                      const TextStyle(color: TmpsColors.faint, fontSize: 12.5),
                 ),
               ),
             ],
@@ -209,7 +241,8 @@ class _LoginScreenState extends State<LoginScreen> {
                 ? const SizedBox(
                     width: 20,
                     height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2.2, color: Colors.white),
                   )
                 : const Text('Войти'),
           ),
@@ -217,7 +250,8 @@ class _LoginScreenState extends State<LoginScreen> {
             const SizedBox(height: 14),
             OutlinedButton.icon(
               onPressed: _busy ? null : _startTelegram,
-              icon: const TmpsIcon(Ico.telegram, color: TmpsColors.telegram, size: 20),
+              icon: const TmpsIcon(Ico.telegram,
+                  color: TmpsColors.telegram, size: 20),
               label: const Text('Через Telegram'),
             ),
           ],
@@ -239,7 +273,8 @@ class _LoginScreenState extends State<LoginScreen> {
           const SizedBox(
             width: 26,
             height: 26,
-            child: CircularProgressIndicator(strokeWidth: 2.4, color: TmpsColors.telegram),
+            child: CircularProgressIndicator(
+                strokeWidth: 2.4, color: TmpsColors.telegram),
           ),
           const SizedBox(height: 18),
           const Text(
@@ -254,7 +289,8 @@ class _LoginScreenState extends State<LoginScreen> {
           ),
           const SizedBox(height: 18),
           OutlinedButton(
-            onPressed: () => launchUrl(Uri.parse(_tgLogin!.url), mode: LaunchMode.externalApplication),
+            onPressed: () => launchUrl(Uri.parse(_tgLogin!.url),
+                mode: LaunchMode.externalApplication),
             child: const Text('Открыть бота ещё раз'),
           ),
           const SizedBox(height: 8),
@@ -276,7 +312,9 @@ class _LoginScreenState extends State<LoginScreen> {
         children: [
           const TmpsIcon(Ico.alert, color: TmpsColors.danger, size: 20),
           const SizedBox(width: 10),
-          Expanded(child: Text(message, style: const TextStyle(color: TmpsColors.danger))),
+          Expanded(
+              child: Text(message,
+                  style: const TextStyle(color: TmpsColors.danger))),
         ],
       ),
     );

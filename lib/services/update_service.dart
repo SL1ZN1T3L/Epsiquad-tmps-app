@@ -16,7 +16,8 @@ class UpdateFailure implements Exception {
 }
 
 class ReleaseAsset {
-  const ReleaseAsset({required this.name, required this.url, required this.size});
+  const ReleaseAsset(
+      {required this.name, required this.url, required this.size});
 
   final String name;
   final String url;
@@ -42,11 +43,13 @@ class ReleaseInfo {
 
   String get version => tag.replaceFirst(RegExp(r'^v'), '');
 
-  static final _abiInName = RegExp(r'(arm64-v8a|armeabi-v7a|x86_64|x86|tmps-v[478]|tmps-x(?:86|64))');
+  static final _abiInName =
+      RegExp(r'(arm64-v8a|armeabi-v7a|x86_64|x86|tmps-v[478]|tmps-x(?:86|64))');
 
   ReleaseAsset? apkFor(List<String> abis) {
-    final apks =
-        assets.where((a) => a.name.toLowerCase().endsWith('.apk')).toList(growable: false);
+    final apks = assets
+        .where((a) => a.name.toLowerCase().endsWith('.apk'))
+        .toList(growable: false);
     if (apks.isEmpty) return null;
     for (final abi in abis) {
       final renamed = switch (abi) {
@@ -106,7 +109,8 @@ class ReleaseInfo {
 int compareVersions(String left, String right) {
   List<int> parts(String value) {
     final core = value.split(RegExp(r'[-+]')).first;
-    final numbers = core.split('.').map((p) => int.tryParse(p.trim()) ?? 0).toList();
+    final numbers =
+        core.split('.').map((p) => int.tryParse(p.trim()) ?? 0).toList();
     while (numbers.length < 3) {
       numbers.add(0);
     }
@@ -128,23 +132,37 @@ class UpdateService {
 
   void close() => _client.close();
 
-  Future<ReleaseInfo?> latest({required String repoUrl, required String currentVersion}) async {
+  Future<ReleaseInfo?> latest(
+      {required String repoUrl, required String currentVersion}) async {
     final slug = _slug(repoUrl);
-    if (slug == null) return null;
+    if (slug == null) {
+      throw UpdateFailure('Сервер указал неверный адрес репозитория');
+    }
+    final http.Response response;
     try {
-      final response = await _client.get(
+      response = await _client.get(
         Uri.parse('https://api.github.com/repos/$slug/releases/latest'),
         headers: const {'Accept': 'application/vnd.github+json'},
       ).timeout(const Duration(seconds: 15));
-      if (response.statusCode != 200) return null;
+    } catch (_) {
+      throw UpdateFailure('Не удалось проверить обновления, проверьте связь');
+    }
+    // У репозитория может просто не быть опубликованных релизов.
+    if (response.statusCode == 404) return null;
+    if (response.statusCode != 200) {
+      throw UpdateFailure('GitHub вернул ошибку ${response.statusCode}');
+    }
+    try {
       final data = jsonDecode(utf8.decode(response.bodyBytes));
-      if (data is! Map<String, dynamic>) return null;
+      if (data is! Map<String, dynamic>) throw const FormatException();
       if (data['draft'] == true || data['prerelease'] == true) return null;
       final release = ReleaseInfo.fromJson(data);
-      if (release.version.isEmpty) return null;
-      return compareVersions(release.version, currentVersion) > 0 ? release : null;
+      if (release.version.isEmpty) throw const FormatException();
+      return compareVersions(release.version, currentVersion) > 0
+          ? release
+          : null;
     } catch (_) {
-      return null;
+      throw UpdateFailure('GitHub вернул некорректные данные о релизе');
     }
   }
 
@@ -154,10 +172,12 @@ class UpdateService {
     void Function(double progress)? onProgress,
   }) async {
     if (checksum == null) {
-      throw UpdateFailure('Для этой версии нет контрольной суммы, обновление отменено');
+      throw UpdateFailure(
+          'Для этой версии нет контрольной суммы, обновление отменено');
     }
 
-    final dir = await getExternalStorageDirectory() ?? await getApplicationDocumentsDirectory();
+    final dir = await getExternalStorageDirectory() ??
+        await getApplicationDocumentsDirectory();
     final file = File('${dir.path}/${apk.name}');
     if (await file.exists()) {
       await file.delete();
@@ -182,7 +202,9 @@ class UpdateService {
       await for (final chunk in response.stream) {
         sink.add(chunk);
         received += chunk.length;
-        if (total > 0) onProgress?.call((received / total).clamp(0.0, 1.0).toDouble());
+        if (total > 0) {
+          onProgress?.call((received / total).clamp(0.0, 1.0).toDouble());
+        }
       }
     } catch (_) {
       await sink.close();
@@ -196,7 +218,8 @@ class UpdateService {
       await _drop(file);
       throw UpdateFailure('Контрольная сумма имеет неверный формат');
     }
-    final actual = (await sha256.bind(file.openRead()).first).toString().toLowerCase();
+    final actual =
+        (await sha256.bind(file.openRead()).first).toString().toLowerCase();
     if (actual != expected) {
       await _drop(file);
       throw UpdateFailure('Контрольная сумма не совпала, файл повреждён');
@@ -216,7 +239,8 @@ class UpdateService {
       case ResultType.noAppToOpen:
         throw UpdateFailure('Не нашлось установщика пакетов');
       case ResultType.permissionDenied:
-        throw UpdateFailure('Разрешите установку приложений из этого источника и повторите');
+        throw UpdateFailure(
+            'Разрешите установку приложений из этого источника и повторите');
       case ResultType.fileNotFound:
         throw UpdateFailure('Скачанный файл пропал, попробуйте заново');
       case ResultType.error:
@@ -227,15 +251,24 @@ class UpdateService {
   Future<String?> _expected(ReleaseAsset asset) async {
     http.Response response;
     try {
-      response = await _client.get(Uri.parse(asset.url)).timeout(const Duration(seconds: 20));
+      response = await _client
+          .get(Uri.parse(asset.url))
+          .timeout(const Duration(seconds: 20));
     } catch (_) {
       throw UpdateFailure('Не удалось получить контрольную сумму');
     }
     if (response.statusCode != 200) {
       throw UpdateFailure('Не удалось получить контрольную сумму');
     }
-    final token = utf8.decode(response.bodyBytes).trim().split(RegExp(r'\s+')).first.toLowerCase();
-    if (token.length != 64 || !RegExp(r'^[0-9a-f]+$').hasMatch(token)) return null;
+    final token = utf8
+        .decode(response.bodyBytes)
+        .trim()
+        .split(RegExp(r'\s+'))
+        .first
+        .toLowerCase();
+    if (token.length != 64 || !RegExp(r'^[0-9a-f]+$').hasMatch(token)) {
+      return null;
+    }
     return token;
   }
 

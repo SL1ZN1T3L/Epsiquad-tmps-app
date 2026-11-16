@@ -120,6 +120,7 @@ class FileDownload {
     required this.allowPause,
     this.cipherName,
     this.decrypt,
+    this.archive = false,
   });
 
   final String id;
@@ -136,6 +137,7 @@ class FileDownload {
   /// Как заново собрать адрес скачивания при повторе.
   final Uri Function() build;
   final bool allowPause;
+  final bool archive;
 
   double progress = 0;
   String? savedPath;
@@ -172,6 +174,7 @@ class UploadTask {
   /// Если ответ complete потерян, сначала проверяем этот объект в хранилище,
   /// а не создаём второй upload с теми же данными.
   String? wireName;
+  int? wireChunkSize;
   bool completionUncertain = false;
 
   Completer<void> _abort = Completer<void>();
@@ -187,9 +190,14 @@ class UploadTask {
     if (!_abort.isCompleted) _abort.complete();
   }
 
-  double get progress => size <= 0 ? 0 : (sentBytes / size).clamp(0.0, 1.0).toDouble();
-  bool get active => status == UploadStatus.queued || status == UploadStatus.uploading || status == UploadStatus.paused;
-  bool get finished => status == UploadStatus.done || status == UploadStatus.canceled;
+  double get progress =>
+      size <= 0 ? 0 : (sentBytes / size).clamp(0.0, 1.0).toDouble();
+  bool get active =>
+      status == UploadStatus.queued ||
+      status == UploadStatus.uploading ||
+      status == UploadStatus.paused;
+  bool get finished =>
+      status == UploadStatus.done || status == UploadStatus.canceled;
 }
 
 class StorageProvider extends ChangeNotifier {
@@ -219,6 +227,9 @@ class StorageProvider extends ChangeNotifier {
   bool _operationRunning = false;
   String? _error;
   bool _disposed = false;
+  int _loadGeneration = 0;
+  int _socketGeneration = 0;
+  Future<void> _uploadWrites = Future<void>.value();
 
   final List<UploadTask> _uploads = [];
   final List<FileDownload> _downloads = [];
@@ -238,6 +249,17 @@ class StorageProvider extends ChangeNotifier {
   bool _live = false;
 
   bool get live => _live;
+
+  /// Восстанавливает сохранённые задачи до подключения к хранилищу.
+  /// Провайдер принадлежит сессии, а не Route, поэтому повторное открытие
+  /// экрана не вызывает этот метод и не создаёт дубликаты.
+  Future<void> initialize() async {
+    await _loadSavedKey();
+    await _restoreUploads();
+    await _restoreDownloads();
+    await load();
+    await connect();
+  }
 
   StorageItem get item => _item;
   StorageState? get state => _state;
@@ -403,8 +425,10 @@ class StorageProvider extends ChangeNotifier {
   int get selectedCount => _selected.length;
   bool isSelected(String name) => _selected.contains(name);
 
-  List<StorageFile> get selectedFiles =>
-      [for (final file in visibleFiles) if (_selected.contains(file.name)) file];
+  List<StorageFile> get selectedFiles => [
+        for (final file in visibleFiles)
+          if (_selected.contains(file.name)) file
+      ];
 
   void toggleSelected(String name) {
     if (!_selected.remove(name)) _selected.add(name);
@@ -504,28 +528,59 @@ class StorageProvider extends ChangeNotifier {
   }
 
   Future<void> load({bool silent = false}) async {
+    final generation = ++_loadGeneration;
+    final code = _item.code;
     if (!silent) {
       _loading = true;
       _error = null;
       _ping();
     }
     try {
-      _item = await _storages.get(_item.code);
-      _state = await _withGrant((grant) => _node.state(_item.code, grant));
+      final item = await _storages.get(code);
+      if (_disposed || generation != _loadGeneration || code != _item.code) {
+        return;
+      }
+      _item = item;
+      final state = await _withGrant((grant) => _node.state(code, grant));
+      if (_disposed || generation != _loadGeneration || code != _item.code) {
+        return;
+      }
+      _state = state;
       await _prepareE2ee();
+      if (_disposed || generation != _loadGeneration || code != _item.code) {
+        return;
+      }
       _pruneSelection();
       _error = null;
     } on ApiException catch (e) {
-      _error = e.message;
+      if (generation == _loadGeneration) _error = e.message;
     } finally {
-      _loading = false;
-      _ping();
+      if (generation == _loadGeneration) {
+        _loading = false;
+        _ping();
+      }
     }
   }
 
   void applyItem(StorageItem item) {
+    if (_disposed || item.code != _item.code) return;
     _item = item;
     _ping();
+  }
+
+  /// После rotate старый owner grant и WebSocket относятся к прежней ссылке.
+  /// E2EE-ключ уже перенесён в SecureStore, а в памяти остаётся тем же.
+  void applyRotatedItem(StorageItem item) {
+    if (_disposed) return;
+    _loadGeneration++;
+    _loading = false;
+    _item = item;
+    _grant = null;
+    _closeSocket();
+    _ping();
+    _persistUploads();
+    unawaited(load(silent: true));
+    unawaited(connect());
   }
 
   Uri fileUri(StorageFile file, {bool download = true}) =>
@@ -540,7 +595,8 @@ class StorageProvider extends ChangeNotifier {
 
   Future<void> download(StorageFile file) {
     if (!e2ee) {
-      return _startDownload(file.name, () => _node.fileUri(_storageBaseUrl, file.name));
+      return _startDownload(
+          file.name, () => _node.fileUri(_storageBaseUrl, file.name));
     }
     final key = _e2eeKey;
     final chunk = file.chunkSize;
@@ -561,7 +617,8 @@ class StorageProvider extends ChangeNotifier {
       file.title,
       () => _node.fileUri(_storageBaseUrl, file.name),
       cipherName: file.name,
-      decrypt: E2eeDownload(key: key, fileId: file.name, chunkSize: chunk, saveAs: file.title),
+      decrypt: E2eeDownload(
+          key: key, fileId: file.name, chunkSize: chunk, saveAs: file.title),
     );
   }
 
@@ -570,7 +627,84 @@ class StorageProvider extends ChangeNotifier {
       'tmps-${_item.code}.zip',
       () => _node.archiveUri(_storageBaseUrl),
       allowPause: false,
+      archive: true,
     );
+  }
+
+  Future<void> _restoreDownloads() async {
+    List<DownloadSnapshot> snapshots;
+    try {
+      snapshots = await _files.restoreForStorage(_item.code);
+    } catch (_) {
+      return;
+    }
+    if (_disposed) return;
+    for (final snapshot in snapshots) {
+      if (_downloads.any((job) => job.id == snapshot.id)) continue;
+      final job = FileDownload(
+        id: snapshot.id,
+        name: snapshot.name,
+        build: () => snapshot.archive
+            ? _node.archiveUri(_storageBaseUrl)
+            : _node.fileUri(
+                _storageBaseUrl, snapshot.cipherName ?? snapshot.name),
+        allowPause: snapshot.allowPause,
+        cipherName: snapshot.cipherName,
+        decrypt: snapshot.decrypt,
+        archive: snapshot.archive,
+      )
+        ..canPause = snapshot.allowPause
+        ..handle = snapshot.handle
+        ..progress = snapshot.progress
+        ..paused = snapshot.paused
+        ..canceled = snapshot.canceled
+        ..savedPath = snapshot.savedPath
+        ..error = snapshot.error;
+      _downloads.add(job);
+      if (!job.done) {
+        _files.observe(
+          job.id,
+          DownloadObserver(
+            onPhase: (hint) {
+              job.hint = hint;
+              _ping();
+            },
+            onProgress: (value) {
+              job.progress = value.clamp(0.0, 1.0).toDouble();
+              _ping();
+            },
+            onStart: (handle) {
+              job.handle = handle;
+              _ping();
+            },
+            onPaused: (paused) {
+              job.paused = paused;
+              _ping();
+            },
+            onSaved: (path) {
+              job.savedPath = path;
+              job.progress = 1;
+              job.error = null;
+              job.canceled = false;
+              job.paused = false;
+              _ping();
+            },
+            onError: (message) {
+              job.error = message;
+              job.paused = false;
+              _ping();
+            },
+            onCanceled: () {
+              job.canceled = true;
+              job.paused = false;
+              _ping();
+            },
+          ),
+        );
+        unawaited(_files.refresh(job.id));
+      }
+    }
+    _ping();
   }
 
   Future<void> _startDownload(
@@ -579,6 +713,7 @@ class StorageProvider extends ChangeNotifier {
     bool allowPause = true,
     String? cipherName,
     E2eeDownload? decrypt,
+    bool archive = false,
   }) {
     final job = FileDownload(
       id: '${DateTime.now().microsecondsSinceEpoch}-${_downloads.length}',
@@ -587,6 +722,7 @@ class StorageProvider extends ChangeNotifier {
       allowPause: allowPause,
       cipherName: cipherName,
       decrypt: decrypt,
+      archive: archive,
     )..canPause = allowPause;
     _downloads.add(job);
     _ping();
@@ -613,11 +749,14 @@ class StorageProvider extends ChangeNotifier {
       final grant = await _ownerGrant();
       if (job.canceled) return;
       job.savedPath = await _files.save(
+        taskId: job.id,
+        storageCode: _item.code,
         url: job.build(),
         headers: _node.ownerHeaders(grant),
         filename: job.cipherName ?? job.name,
         displayName: job.name,
         decrypt: job.decrypt,
+        archive: job.archive,
         onPhase: (hint) {
           job.hint = hint;
           _ping();
@@ -663,7 +802,9 @@ class StorageProvider extends ChangeNotifier {
 
   Future<void> pauseDownload(FileDownload job) async {
     final handle = job.handle;
-    if (handle == null || !job.running || job.paused || !job.pauseEnabled) return;
+    if (handle == null || !job.running || job.paused || !job.pauseEnabled) {
+      return;
+    }
     final ok = await _files.pause(handle);
     job.hint = ok ? null : 'Для этого файла пауза недоступна';
     if (ok) job.paused = true;
@@ -690,30 +831,131 @@ class StorageProvider extends ChangeNotifier {
   }
 
   Future<void> pauseAllDownloads() async {
-    await Future.wait(_downloads.where((j) => j.running && j.pauseEnabled && !j.paused).map(pauseDownload));
+    await Future.wait(_downloads
+        .where((j) => j.running && j.pauseEnabled && !j.paused)
+        .map(pauseDownload));
   }
 
   Future<void> resumeAllDownloads() async {
-    await Future.wait(_downloads.where((j) => j.running && j.paused).map(resumeDownload));
+    await Future.wait(
+        _downloads.where((j) => j.running && j.paused).map(resumeDownload));
   }
 
   Future<void> cancelAllDownloads() async {
-    await Future.wait(_downloads.where((j) => j.running).toList().map(cancelDownload));
+    await Future.wait(
+        _downloads.where((j) => j.running).toList().map(cancelDownload));
   }
 
   void forgetDownload(FileDownload job) {
     _downloads.remove(job);
+    unawaited(_files.forget(job.id));
     _ping();
   }
 
   void clearFinishedDownloads() {
+    final removed = _downloads
+        .where((d) => d.done || d.error != null || d.canceled)
+        .toList(growable: false);
     _downloads.removeWhere((d) => d.done || d.error != null || d.canceled);
+    for (final job in removed) {
+      unawaited(_files.forget(job.id));
+    }
     _ping();
   }
 
   Future<void> deleteFiles(List<String> names) async {
     await _withGrant((grant) => _node.deleteFiles(_item.code, grant, names));
     await load(silent: true);
+  }
+
+  Map<String, dynamic> _uploadJson(UploadTask task) => {
+        'id': task.id,
+        'name': task.name,
+        'size': task.size,
+        'path': task.source.path,
+        'status': task.status.name,
+        'sentBytes': task.sentBytes,
+        'uid': task.uid,
+        'wireName': task.wireName,
+        'wireChunkSize': task.wireChunkSize,
+        'completionUncertain': task.completionUncertain,
+      };
+
+  void _persistUploads() {
+    final secure = _secure;
+    if (secure == null) return;
+    final code = _item.code;
+    final wipeGeneration = secure.wipeGeneration;
+    final snapshot = [
+      for (final task in _uploads)
+        if (task.source.path != null && !task.finished) _uploadJson(task),
+    ];
+    // Записи выполняются последовательно: старый снимок не сможет перезаписать
+    // более новый UID или состояние задачи.
+    _uploadWrites = _uploadWrites.catchError((_) {}).then((_) async {
+      if (_disposed ||
+          code != _item.code ||
+          secure.wipeGeneration != wipeGeneration) {
+        return;
+      }
+      try {
+        await secure.writeUploadTasks(code, snapshot);
+        if (code != _item.code || secure.wipeGeneration != wipeGeneration) {
+          await secure.deleteUploadTasks(code);
+        }
+      } catch (_) {}
+    });
+    unawaited(_uploadWrites);
+  }
+
+  Future<void> _restoreUploads() async {
+    final secure = _secure;
+    if (secure == null) return;
+    List<Map<String, dynamic>> saved;
+    try {
+      saved = await secure.readUploadTasks(_item.code);
+    } catch (_) {
+      return;
+    }
+    if (_disposed) return;
+    for (final raw in saved) {
+      final id = raw['id'];
+      final name = raw['name'];
+      final size = raw['size'];
+      final path = raw['path'];
+      if (id is! String ||
+          name is! String ||
+          name.isEmpty ||
+          size is! num ||
+          size < 0 ||
+          path is! String ||
+          path.isEmpty ||
+          _uploads.any((task) => task.id == id)) {
+        continue;
+      }
+      final source = UploadSource(
+        name: name,
+        size: size.toInt(),
+        path: path,
+        openStream: () => File(path).openRead(),
+      );
+      final task = UploadTask(id: id, source: source)
+        ..sentBytes = (raw['sentBytes'] as num?)?.toInt() ?? 0
+        ..uid = raw['uid'] as String?
+        ..wireName = raw['wireName'] as String?
+        ..wireChunkSize = (raw['wireChunkSize'] as num?)?.toInt()
+        ..completionUncertain = raw['completionUncertain'] == true;
+      final status = UploadStatus.values.asNameMap()[raw['status']];
+      task.status = switch (status) {
+        UploadStatus.uploading => UploadStatus.queued,
+        UploadStatus.paused => UploadStatus.paused,
+        UploadStatus.error => UploadStatus.error,
+        _ => UploadStatus.queued,
+      };
+      _uploads.add(task);
+    }
+    _ping();
+    unawaited(_pump());
   }
 
   void enqueue(Iterable<UploadSource> picked) {
@@ -724,53 +966,66 @@ class StorageProvider extends ChangeNotifier {
       ));
     }
     _ping();
+    _persistUploads();
     unawaited(_pump());
   }
 
   void pause(UploadTask task) {
-    if (task.status == UploadStatus.uploading || task.status == UploadStatus.queued) {
+    if (task.status == UploadStatus.uploading ||
+        task.status == UploadStatus.queued) {
       task.status = UploadStatus.paused;
       task.triggerAbort();
       _ping();
+      _persistUploads();
     }
   }
 
   void resume(UploadTask task) {
-    if (task.status == UploadStatus.paused || task.status == UploadStatus.error) {
+    if (task.status == UploadStatus.paused ||
+        task.status == UploadStatus.error) {
       task.status = UploadStatus.queued;
       task.error = null;
       _ping();
+      _persistUploads();
       unawaited(_pump());
     }
   }
 
   void pauseAll() {
     for (final task in _uploads) {
-      if (task.status == UploadStatus.uploading || task.status == UploadStatus.queued) {
+      if (task.status == UploadStatus.uploading ||
+          task.status == UploadStatus.queued) {
         task.status = UploadStatus.paused;
         task.triggerAbort();
       }
     }
     _ping();
+    _persistUploads();
   }
 
   void resumeAll() {
     for (final task in _uploads) {
-      if (task.status == UploadStatus.paused || task.status == UploadStatus.error) {
+      if (task.status == UploadStatus.paused ||
+          task.status == UploadStatus.error) {
         task.status = UploadStatus.queued;
         task.error = null;
       }
     }
     _ping();
+    _persistUploads();
     unawaited(_pump());
   }
 
   Future<void> cancel(UploadTask task) async {
-    if (task.status == UploadStatus.done || task.status == UploadStatus.canceled) return;
+    if (task.status == UploadStatus.done ||
+        task.status == UploadStatus.canceled) {
+      return;
+    }
     final uid = task.uid;
     task.status = UploadStatus.canceled;
     task.triggerAbort();
     _ping();
+    _persistUploads();
     if (uid != null) {
       try {
         await _withGrant((grant) => _node.abortUpload(_item.code, grant, uid));
@@ -786,12 +1041,14 @@ class StorageProvider extends ChangeNotifier {
   void clearFinished() {
     _uploads.removeWhere((t) => t.finished || t.status == UploadStatus.error);
     _ping();
+    _persistUploads();
   }
 
   Future<void> _pump() async {
     if (_pumping) return;
     _pumping = true;
     try {
+      if (e2ee && _e2eeKey == null) await _loadSavedKey();
       while (!_disposed) {
         UploadTask? next;
         for (final task in _uploads) {
@@ -831,8 +1088,10 @@ class StorageProvider extends ChangeNotifier {
 
   /// Проверяет, что сервер выдал ту же разбивку на куски, с которой посчитан размер шифртекста.
   void _checkWire(UploadSession session, int wireChunk, int plainSize) {
-    if (session.chunkSize != wireChunk || session.totalChunks != E2ee.chunkCount(plainSize, wireChunk)) {
-      throw ApiException('Размер части на сервере изменился, откройте хранилище заново');
+    if (session.chunkSize != wireChunk ||
+        session.totalChunks != E2ee.chunkCount(plainSize, wireChunk)) {
+      throw ApiException(
+          'Размер части на сервере изменился, откройте хранилище заново');
     }
   }
 
@@ -861,7 +1120,8 @@ class StorageProvider extends ChangeNotifier {
       // Имя могло быть изменено сервером из-за конфликта. Не угадываем его и
       // не создаём дубликат: пользователь сначала видит актуальный список.
       task.status = UploadStatus.error;
-      task.error = 'Результат загрузки не подтверждён. Проверьте список файлов; '
+      task.error =
+          'Результат загрузки не подтверждён. Проверьте список файлов; '
           'для новой попытки удалите эту задачу и выберите файл заново';
     }
     _ping();
@@ -880,21 +1140,26 @@ class StorageProvider extends ChangeNotifier {
     task.status = UploadStatus.uploading;
     task.error = null;
     _ping();
+    _persistUploads();
 
     final reader = _ChunkReader(task.source);
     try {
       await reader.open();
 
       // В зашифрованном хранилище на сервер уходит шифртекст: другое имя, другой размер, другие куски.
-      final wireChunk = _state?.chunkSize ?? 8 * 1024 * 1024;
-      Future<String> wireName() async =>
-          key == null ? task.name : await E2ee.encryptName(key, task.name, wireChunk);
-      final wireSize = key == null ? task.size : E2ee.encryptedSize(task.size, wireChunk);
+      final wireChunk =
+          task.wireChunkSize ?? _state?.chunkSize ?? 8 * 1024 * 1024;
+      Future<String> wireName() async => key == null
+          ? task.name
+          : await E2ee.encryptName(key, task.name, wireChunk);
+      final wireSize =
+          key == null ? task.size : E2ee.encryptedSize(task.size, wireChunk);
 
       final startedUid = task.uid;
       final resumed = startedUid == null
           ? null
-          : await _withGrant((grant) => _node.uploadState(_item.code, grant, startedUid));
+          : await _withGrant(
+              (grant) => _node.uploadState(_item.code, grant, startedUid));
       if (startedUid != null &&
           resumed == null &&
           await _resolveUncertainCompletion(task)) {
@@ -906,9 +1171,13 @@ class StorageProvider extends ChangeNotifier {
       task.wireName = session.name;
       task.completionUncertain = false;
       if (key != null) _checkWire(session, wireChunk, task.size);
+      task.wireChunkSize = session.chunkSize;
       task.uid = session.uid;
+      _persistUploads();
 
-      int step() => key == null ? session.chunkSize : E2ee.plainChunkSize(session.chunkSize);
+      int step() => key == null
+          ? session.chunkSize
+          : E2ee.plainChunkSize(session.chunkSize);
 
       var received = session.received;
       task.sentBytes = min(task.size, received.length * step());
@@ -958,16 +1227,19 @@ class StorageProvider extends ChangeNotifier {
           if (task.status != UploadStatus.uploading) return;
 
           session = await _withGrant(
-            (grant) async => _node.initUpload(_item.code, grant, await wireName(), wireSize),
+            (grant) async =>
+                _node.initUpload(_item.code, grant, await wireName(), wireSize),
           );
           if (key != null) _checkWire(session, wireChunk, task.size);
           task.uid = session.uid;
           task.wireName = session.name;
+          task.wireChunkSize = session.chunkSize;
           task.completionUncertain = false;
           received = session.received;
           task.sentBytes = 0;
           index = -1;
           _ping();
+          _persistUploads();
           continue;
         }
 
@@ -978,8 +1250,16 @@ class StorageProvider extends ChangeNotifier {
 
       if (task.status != UploadStatus.uploading) return;
       final finalUid = session.uid;
+      // С этого момента даже внезапный process death считается неопределённым
+      // завершением: после рестарта сначала ищем файл, а не создаём дубликат.
+      task.completionUncertain = true;
+      task.wireName = session.name;
+      _persistUploads();
+      await _uploadWrites;
+      if (task.status != UploadStatus.uploading || _disposed) return;
       try {
-        await _withGrant((grant) => _node.completeUpload(_item.code, grant, finalUid));
+        await _withGrant(
+            (grant) => _node.completeUpload(_item.code, grant, finalUid));
       } on ApiException catch (e) {
         if (e.status == 0 || e.status >= 500) {
           task.completionUncertain = true;
@@ -1005,25 +1285,40 @@ class StorageProvider extends ChangeNotifier {
       task.error = 'Не удалось прочитать файл';
     } finally {
       await reader.close();
+      _persistUploads();
       _ping();
     }
   }
 
   Future<void> connect() async {
     if (_disposed || _socket != null) return;
+    final generation = _socketGeneration;
+    final code = _item.code;
     try {
       final grant = await _ownerGrant();
-      if (_disposed) return;
-      final socket = _node.watch(_item.code, grant);
+      if (_disposed || generation != _socketGeneration || code != _item.code) {
+        return;
+      }
+      final socket = _node.watch(code, grant);
       _socket = socket;
+      bool current() =>
+          !_disposed &&
+          generation == _socketGeneration &&
+          identical(_socket, socket);
       _events = socket.stream.listen(
-        _onEvent,
-        onDone: _onClosed,
-        onError: (_) => _onClosed(),
+        (event) {
+          if (current()) _onEvent(event);
+        },
+        onDone: () {
+          if (current()) _onClosed();
+        },
+        onError: (_) {
+          if (current()) _onClosed();
+        },
         cancelOnError: true,
       );
     } catch (_) {
-      _onClosed();
+      if (!_disposed && generation == _socketGeneration) _onClosed();
     }
   }
 
@@ -1069,7 +1364,21 @@ class StorageProvider extends ChangeNotifier {
     });
   }
 
+  void _closeSocket() {
+    _socketGeneration++;
+    _live = false;
+    _reconnect?.cancel();
+    _reconnect = null;
+    _events?.cancel();
+    _events = null;
+    try {
+      _socket?.sink.close();
+    } catch (_) {}
+    _socket = null;
+  }
+
   void _onClosed() {
+    final generation = _socketGeneration;
     _live = false;
     _events?.cancel();
     _events = null;
@@ -1079,19 +1388,20 @@ class StorageProvider extends ChangeNotifier {
     _attempt = min(_attempt + 1, 5);
     _reconnect?.cancel();
     _reconnect = Timer(Duration(seconds: 2 << (_attempt - 1)), () {
-      if (!_disposed) unawaited(connect());
+      if (!_disposed && generation == _socketGeneration) unawaited(connect());
     });
   }
 
   @override
   void dispose() {
     _disposed = true;
+    _loadGeneration++;
     _debounce?.cancel();
-    _reconnect?.cancel();
-    _events?.cancel();
-    try {
-      _socket?.sink.close();
-    } catch (_) {}
+    _closeSocket();
+    for (final download in _downloads) {
+      _files.unobserve(download.id);
+    }
+    _node.close();
     super.dispose();
   }
 }

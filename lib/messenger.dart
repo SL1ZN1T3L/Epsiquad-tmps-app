@@ -1,3 +1,4 @@
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 
 /// Общий ключ для показа уведомлений вне дерева виджетов,

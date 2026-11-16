@@ -57,7 +57,8 @@ class AppProvider extends ChangeNotifier {
   }
 
   void _syncLiveChannel() {
-    final shouldRun = _stage == AppStage.ready && _tokens != null && !_autoLocked;
+    final shouldRun =
+        _stage == AppStage.ready && _tokens != null && !_autoLocked;
     if (shouldRun && _liveChannel == null) {
       _liveChannel = UserEvents(
         baseUrl: api.baseUrl,
@@ -102,10 +103,13 @@ class AppProvider extends ChangeNotifier {
   bool _autoBiometricEnabled = true;
   String? _notice;
   ReleaseInfo? _update;
+  String? _updateError;
 
   // Настройки безопасности и напоминаний
   static const _kAutoLock = 'tmps_auto_lock_minutes';
   static const _kExpiryLead = 'tmps_expiry_lead_hours';
+  static const _configError =
+      'Не удалось получить настройки сервера. Проверьте связь и повторите';
   int _autoLockMinutes = 5;
   bool _hideRecents = true;
   int _expiryLeadHours = 24;
@@ -113,6 +117,7 @@ class AppProvider extends ChangeNotifier {
   DateTime _lastActive = DateTime.now();
   int _lockHolds = 0;
   bool _shareStarted = false;
+  bool _shareDeferred = false;
   List<SharedFile> _pendingShare = const [];
   List<StorageItem> _knownStorages = const [];
 
@@ -131,6 +136,7 @@ class AppProvider extends ChangeNotifier {
   UpdateService get updates => _updates;
   String? get notice => _notice;
   ReleaseInfo? get update => _update;
+  String? get updateError => _updateError;
   bool get signedIn => _tokens != null && _user != null;
   bool get devMode => _devMode;
   int get autoLockMinutes => _autoLockMinutes;
@@ -138,6 +144,7 @@ class AppProvider extends ChangeNotifier {
   int get expiryLeadHours => _expiryLeadHours;
   bool get autoLocked => _autoLocked;
   List<SharedFile> get pendingShare => _pendingShare;
+  bool get shareDeferred => _shareDeferred;
 
   bool get outdated {
     final cfg = _config;
@@ -215,7 +222,8 @@ class AppProvider extends ChangeNotifier {
   void checkAutoLock() {
     if (_stage != AppStage.ready || _autoLocked) return;
     if (_autoLockMinutes <= 0 || _lockHolds > 0) return;
-    if (DateTime.now().difference(_lastActive) >= Duration(minutes: _autoLockMinutes)) {
+    if (DateTime.now().difference(_lastActive) >=
+        Duration(minutes: _autoLockMinutes)) {
       lockNow();
     }
   }
@@ -265,16 +273,48 @@ class AppProvider extends ChangeNotifier {
 
   // ---- Файлы из «Поделиться» ----
 
-  void _onShared(List<SharedFile> files) {
+  void acceptShare(List<SharedFile> files) {
     if (files.isEmpty) return;
     _pendingShare = [..._pendingShare, ...files];
+    _shareDeferred = false;
     notifyListeners();
   }
 
-  List<SharedFile> takeShare() {
-    final taken = _pendingShare;
-    _pendingShare = const [];
-    return taken;
+  /// Отмена выбора хранилища не удаляет файлы, но и не открывает sheet заново
+  /// после каждой перерисовки. Пользователь может продолжить кнопкой на экране.
+  void deferShare() {
+    if (_pendingShare.isEmpty) return;
+    _shareDeferred = true;
+    notifyListeners();
+  }
+
+  void retryShare() {
+    if (_pendingShare.isEmpty) return;
+    _shareDeferred = false;
+    notifyListeners();
+  }
+
+  /// Вызывается только после фактического enqueue в StorageProvider.
+  void completeShare(List<SharedFile> files) {
+    final completed = files.toSet();
+    _pendingShare = _pendingShare
+        .where((file) => !completed.contains(file))
+        .toList(growable: false);
+    _shareDeferred = false;
+    notifyListeners();
+  }
+
+  Future<bool> refreshConfig() async {
+    try {
+      _config = await auth.config();
+      if (_notice == _configError) _notice = null;
+      notifyListeners();
+      return true;
+    } catch (_) {
+      _notice = _configError;
+      notifyListeners();
+      return false;
+    }
   }
 
   Future<void> bootstrap() async {
@@ -286,18 +326,13 @@ class AppProvider extends ChangeNotifier {
     await _loadSettings();
     if (!_shareStarted) {
       _shareStarted = true;
-      unawaited(ShareInbox.start(_onShared));
+      unawaited(ShareInbox.start(acceptShare));
     }
     _deviceId = await _store.deviceId();
     _biometricEnabled = await _store.biometricEnabled();
     _biometricAvailable = await _store.biometricAvailable();
 
-    try {
-      _config = await auth.config();
-    } catch (_) {
-      _notice =
-          'Не удалось получить настройки сервера. Показаны сохранённые данные';
-    }
+    await refreshConfig();
 
     _stage = await _store.hasPin() ? AppStage.locked : AppStage.signedOut;
     notifyListeners();
@@ -334,8 +369,7 @@ class AppProvider extends ChangeNotifier {
     final refresh = await _store.readRefreshToken();
     if (refresh == null || refresh.isEmpty) {
       await _store.wipe();
-      _biometricEnabled = false;
-      _stage = AppStage.signedOut;
+      _afterWipe();
       _notice = 'Нужно войти заново';
       notifyListeners();
       return;
@@ -345,12 +379,27 @@ class AppProvider extends ChangeNotifier {
     await _restore(refresh);
   }
 
-  void _afterWipe() {
+  void _resetSessionState() {
     _autoLocked = false;
     _biometricEnabled = false;
     _tokens = null;
     _user = null;
+    _pendingShare = const [];
+    _shareDeferred = false;
+    _knownStorages = const [];
+    _update = null;
+    _updateError = null;
+    _devMode = false;
+    api.setOffline(false);
     _stage = AppStage.signedOut;
+  }
+
+  void _afterWipe() {
+    _resetSessionState();
+    // PIN wipe происходит внутри SecureStore: здесь обязательно очищаем и
+    // внешние по отношению к нему Android/Dart данные.
+    unawaited(ReminderService.cancelAll());
+    unawaited(DownloadService.cancelAll());
     notifyListeners();
   }
 
@@ -392,8 +441,9 @@ class AppProvider extends ChangeNotifier {
       // потерять уже выполненную серверную ротацию.
       await _store.writeRefreshToken(_tokens!.refreshToken);
       await api.discover();
+      if (_config == null) await refreshConfig();
       _applyProfile(await auth.me());
-      _notice = null;
+      if (_config != null) _notice = null;
       _stage = AppStage.ready;
       unawaited(checkForUpdate());
     } on ApiException catch (e) {
@@ -485,6 +535,7 @@ class AppProvider extends ChangeNotifier {
     _user = result.user;
     // Только после успешной авторизации загружаем рабочий контракт API.
     await api.discover();
+    if (_config == null) await refreshConfig();
     if (_store.unlocked) {
       await _store.writeRefreshToken(result.tokens.refreshToken);
       _stage = AppStage.ready;
@@ -535,17 +586,17 @@ class AppProvider extends ChangeNotifier {
     try {
       if (_tokens != null) await auth.logout();
     } catch (_) {}
+    // Очистка локальных данных не должна зависеть от зависшего нативного
+    // канала: выход и удаление ключей обязаны завершиться в любом случае.
+    try {
+      await DownloadService.cancelAll().timeout(const Duration(seconds: 5));
+    } catch (_) {}
+    try {
+      await ReminderService.cancelAll().timeout(const Duration(seconds: 5));
+    } catch (_) {}
     await _store.wipe();
-    _autoLocked = false;
-    _pendingShare = const [];
-    _knownStorages = const [];
-    unawaited(ReminderService.cancelAll());
-    _biometricEnabled = false;
-    _tokens = null;
-    _user = null;
-    _update = null;
-    await setDevMode(false);
-    _stage = AppStage.signedOut;
+    _resetSessionState();
+    _notice = null;
     notifyListeners();
   }
 
@@ -574,13 +625,23 @@ class AppProvider extends ChangeNotifier {
   Future<void> revokeDevice(int id) => auth.revokeDevice(id);
 
   Future<void> checkForUpdate() async {
-    if (_devMode) return;
+    _updateError = null;
+    if (_devMode) {
+      _updateError = 'В Dev Mode сеть отключена';
+      return;
+    }
     final repo = _config?.repoUrl;
-    if (repo == null || repo.isEmpty) return;
-    final found =
-        await _updates.latest(repoUrl: repo, currentVersion: _appVersion);
-    if (found == null) return;
-    _update = found;
+    if (repo == null || repo.isEmpty) {
+      _updateError = 'Сервер не указал репозиторий обновлений';
+      return;
+    }
+    try {
+      final found =
+          await _updates.latest(repoUrl: repo, currentVersion: _appVersion);
+      _update = found;
+    } on UpdateFailure catch (e) {
+      _updateError = e.message;
+    }
     notifyListeners();
   }
 

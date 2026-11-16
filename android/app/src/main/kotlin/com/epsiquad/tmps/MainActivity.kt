@@ -221,8 +221,25 @@ class MainActivity : FlutterFragmentActivity() {
         return if (clean.isEmpty()) "file" else clean
     }
 
+    private fun uniqueShareTarget(dir: File, name: String): File {
+        var candidate = File(dir, name)
+        if (!candidate.exists()) return candidate
+        val dot = name.lastIndexOf('.')
+        val base = if (dot > 0) name.substring(0, dot) else name
+        val extension = if (dot > 0) name.substring(dot) else ""
+        var index = 2
+        while (candidate.exists()) {
+            candidate = File(dir, "$base ($index)$extension")
+            index++
+        }
+        return candidate
+    }
+
     private fun copyShared(uri: Uri, dir: File, maxBytes: Long): Pair<Map<String, Any>, Long>? {
-        val target = File(dir, displayName(uri))
+        val name = displayName(uri)
+        // Одинаковые display name должны получить разные cache path, но на
+        // сервер оба файла по-прежнему уходят под исходными именами.
+        val target = uniqueShareTarget(dir, name)
         val input = contentResolver.openInputStream(uri) ?: return null
         try {
             input.use { source ->
@@ -245,7 +262,7 @@ class MainActivity : FlutterFragmentActivity() {
             throw e
         }
         val size = target.length()
-        return mapOf("name" to target.name, "size" to size, "path" to target.absolutePath) to size
+        return mapOf("name" to name, "size" to size, "path" to target.absolutePath) to size
     }
 
     /** Удаляем копии старше трёх суток, чтобы кэш не рос. */
@@ -379,7 +396,9 @@ class MainActivity : FlutterFragmentActivity() {
         if (intent.getIntExtra(KEY_NOTIFICATION_TYPE, -1) != NOTIFICATION_COMPLETE) return
         val taskJson = intent.getStringExtra(KEY_TASK) ?: return
         val filename = try {
-            JSONObject(taskJson).optString("filename")
+            val json = JSONObject(taskJson)
+            // Для E2EE filename — имя шифртекста, а в «Загрузках» лежит displayName.
+            json.optString("displayName").ifEmpty { json.optString("filename") }
         } catch (e: Exception) {
             ""
         }

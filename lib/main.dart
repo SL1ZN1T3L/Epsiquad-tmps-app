@@ -1,3 +1,4 @@
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/date_symbol_data_local.dart';
@@ -18,7 +19,7 @@ Future<void> main() async {
   await initializeDateFormatting('ru');
   // Обработчик нажатия на уведомление о скачивании нужен с самого запуска:
   // по нему Android может поднять закрытое приложение.
-  DownloadService.init();
+  await DownloadService.init();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness: Brightness.light,
@@ -40,7 +41,8 @@ class TmpsApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         scaffoldMessengerKey: messengerKey,
         navigatorKey: navigatorKey,
-        builder: (context, child) => AppShell(child: child ?? const SizedBox.shrink()),
+        builder: (context, child) =>
+            AppShell(child: child ?? const SizedBox.shrink()),
         theme: buildTheme(),
         home: const _Root(),
       ),

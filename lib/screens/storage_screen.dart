@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:file_picker/file_picker.dart';
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -16,7 +17,6 @@ import '../providers/app_provider.dart';
 import '../providers/storage_provider.dart';
 import '../providers/storages_provider.dart';
 import '../services/api_client.dart';
-import '../services/node_service.dart';
 import '../theme.dart';
 import '../widgets/dialog_actions.dart';
 import '../widgets/brand.dart';
@@ -24,12 +24,13 @@ import '../widgets/file_tile.dart';
 import '../widgets/transfers_panel.dart';
 import 'file_preview_screen.dart';
 
-class StorageScreen extends StatelessWidget {
+class StorageScreen extends StatefulWidget {
   const StorageScreen({
     super.key,
     required this.item,
     required this.storages,
     this.uploads = const [],
+    this.onUploadsEnqueued,
   });
 
   final StorageItem item;
@@ -37,24 +38,30 @@ class StorageScreen extends StatelessWidget {
 
   /// Файлы, которые нужно сразу отправить (например, из «Поделиться»).
   final List<UploadSource> uploads;
+  final VoidCallback? onUploadsEnqueued;
+
+  @override
+  State<StorageScreen> createState() => _StorageScreenState();
+}
+
+class _StorageScreenState extends State<StorageScreen> {
+  late final StorageProvider _provider;
+
+  @override
+  void initState() {
+    super.initState();
+    _provider = widget.storages.providerFor(widget.item);
+    if (widget.uploads.isNotEmpty) {
+      _provider.enqueue(widget.uploads);
+      widget.onUploadsEnqueued?.call();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final app = context.read<AppProvider>();
-    return ChangeNotifierProvider(
-      create: (_) {
-        final provider = StorageProvider(
-          storages: app.storages,
-          node: NodeService(),
-          initial: item,
-          secure: app.secureStore,
-        )
-          ..load()
-          ..connect();
-        if (uploads.isNotEmpty) provider.enqueue(uploads);
-        return provider;
-      },
-      child: _StorageView(storages: storages),
+    return ChangeNotifierProvider.value(
+      value: _provider,
+      child: _StorageView(storages: widget.storages),
     );
   }
 }
@@ -165,121 +172,124 @@ class _StorageView extends StatelessWidget {
         if (!didPop) provider.clearSelection();
       },
       child: Scaffold(
-      appBar: provider.selecting
-          ? _selectionBar(context, provider, canWrite)
-          : AppBar(
-              title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
-            ),
-      floatingActionButton: canWrite && !provider.selecting
-          ? FloatingActionButton.extended(
-              onPressed: provider.operationRunning ? null : () => _pickFiles(context, provider),
-              backgroundColor: TmpsColors.accent,
-              foregroundColor: Colors.white,
-              icon: const TmpsIcon(Ico.upload),
-              label: const Text('Загрузить'),
-            )
-          : null,
-      body: RefreshIndicator(
-        color: TmpsColors.accent,
-        backgroundColor: TmpsColors.surface,
-        onRefresh: () => provider.load(silent: true),
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
-          children: [
-            _header(context, provider),
-            const SizedBox(height: 12),
-            if (provider.e2eeNeedsKey) ...[
-              _keyBanner(context, provider),
-              const SizedBox(height: 12),
-            ],
-            _actions(context, provider),
-            const SizedBox(height: 12),
-            TransfersPanel(provider: provider),
-            if (provider.uploads.isNotEmpty || provider.downloads.isNotEmpty)
-              const SizedBox(height: 12),
-            if (provider.error != null) ...[
-              _errorBox(provider.error!),
-              const SizedBox(height: 12),
-            ],
-            _filesHeader(provider, visible.length),
-            const SizedBox(height: 10),
-            if (provider.loading && state == null)
-              const Padding(
-                padding: EdgeInsets.only(top: 4),
-                child: Column(children: [
-                  FileTileSkeleton(),
-                  FileTileSkeleton(),
-                  FileTileSkeleton(),
-                ]),
+        appBar: provider.selecting
+            ? _selectionBar(context, provider, canWrite)
+            : AppBar(
+                title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
+              ),
+        floatingActionButton: canWrite && !provider.selecting
+            ? FloatingActionButton.extended(
+                onPressed: provider.operationRunning
+                    ? null
+                    : () => _pickFiles(context, provider),
+                backgroundColor: TmpsColors.accent,
+                foregroundColor: Colors.white,
+                icon: const TmpsIcon(Ico.upload),
+                label: const Text('Загрузить'),
               )
-            else if (provider.files.isEmpty)
-              Padding(
-                padding: const EdgeInsets.only(top: 24),
-                child: EmptyState(
-                  icon: Ico.upload,
-                  title: 'Файлов пока нет',
-                  subtitle: canWrite
-                      ? 'Выберите файлы — они появятся здесь после загрузки.'
-                      : 'В этом хранилище пока нет доступных файлов.',
-                  action: canWrite
-                      ? FilledButton.icon(
-                          onPressed: provider.operationRunning
-                              ? null
-                              : () => _pickFiles(context, provider),
-                          icon: const TmpsIcon(Ico.upload, size: 19),
-                          label: const Text('Выбрать файлы'),
-                        )
-                      : null,
-                ),
-              )
-            else ...[
-              _FilesToolbar(provider: provider),
+            : null,
+        body: RefreshIndicator(
+          color: TmpsColors.accent,
+          backgroundColor: TmpsColors.surface,
+          onRefresh: () => provider.load(silent: true),
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 96),
+            children: [
+              _header(context, provider),
+              const SizedBox(height: 12),
+              if (provider.e2eeNeedsKey) ...[
+                _keyBanner(context, provider),
+                const SizedBox(height: 12),
+              ],
+              _actions(context, provider),
+              const SizedBox(height: 12),
+              TransfersPanel(provider: provider),
+              if (provider.uploads.isNotEmpty || provider.downloads.isNotEmpty)
+                const SizedBox(height: 12),
+              if (provider.error != null) ...[
+                _errorBox(provider.error!),
+                const SizedBox(height: 12),
+              ],
+              _filesHeader(provider, visible.length),
               const SizedBox(height: 10),
-              if (visible.isEmpty)
+              if (provider.loading && state == null)
                 const Padding(
-                  padding: EdgeInsets.only(top: 24),
+                  padding: EdgeInsets.only(top: 4),
+                  child: Column(children: [
+                    FileTileSkeleton(),
+                    FileTileSkeleton(),
+                    FileTileSkeleton(),
+                  ]),
+                )
+              else if (provider.files.isEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(top: 24),
                   child: EmptyState(
-                    icon: Ico.search,
-                    title: 'Ничего не найдено',
-                    subtitle: 'Измените запрос или очистите поиск.',
+                    icon: Ico.upload,
+                    title: 'Файлов пока нет',
+                    subtitle: canWrite
+                        ? 'Выберите файлы — они появятся здесь после загрузки.'
+                        : 'В этом хранилище пока нет доступных файлов.',
+                    action: canWrite
+                        ? FilledButton.icon(
+                            onPressed: provider.operationRunning
+                                ? null
+                                : () => _pickFiles(context, provider),
+                            icon: const TmpsIcon(Ico.upload, size: 19),
+                            label: const Text('Выбрать файлы'),
+                          )
+                        : null,
                   ),
                 )
-              else
-                for (final file in visible)
-                  FileTile(
-                    file: file,
-                    stats: state?.stats[file.name],
-                    showStats: state?.isOwner ?? false,
-                    canDelete: canWrite,
-                    thumbnailUri: !provider.e2ee && file.kind == 'image'
-                        ? provider.fileUri(file, download: false)
-                        : null,
-                    thumbnailHeaders: provider.ownerHeaders,
-                    selecting: provider.selecting,
-                    selected: provider.isSelected(file.name),
-                    onOpen: () => _openPreview(context, provider, file),
-                    onLongPress: () => provider.toggleSelected(file.name),
-                    onToggle: () => provider.toggleSelected(file.name),
-                    onShare: provider.e2ee
-                        ? null
-                        : () => SharePlus.instance.share(
-                              ShareParams(text: provider.fileUri(file).toString()),
-                            ),
-                    onDownload: () {
-                      if (provider.e2eeNeedsKey) {
-                        unawaited(_askE2eeKey(context, provider));
-                        return;
-                      }
-                      unawaited(provider.download(file));
-                    },
-                    onDelete: () =>
-                        _confirmDeleteFile(context, provider, file.name, file.title),
-                  ),
+              else ...[
+                _FilesToolbar(provider: provider),
+                const SizedBox(height: 10),
+                if (visible.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 24),
+                    child: EmptyState(
+                      icon: Ico.search,
+                      title: 'Ничего не найдено',
+                      subtitle: 'Измените запрос или очистите поиск.',
+                    ),
+                  )
+                else
+                  for (final file in visible)
+                    FileTile(
+                      file: file,
+                      stats: state?.stats[file.name],
+                      showStats: state?.isOwner ?? false,
+                      canDelete: canWrite,
+                      thumbnailUri: !provider.e2ee && file.kind == 'image'
+                          ? provider.fileUri(file, download: false)
+                          : null,
+                      thumbnailHeaders: provider.ownerHeaders,
+                      selecting: provider.selecting,
+                      selected: provider.isSelected(file.name),
+                      onOpen: () => _openPreview(context, provider, file),
+                      onLongPress: () => provider.toggleSelected(file.name),
+                      onToggle: () => provider.toggleSelected(file.name),
+                      onShare: provider.e2ee
+                          ? null
+                          : () => SharePlus.instance.share(
+                                ShareParams(
+                                    text: provider.fileUri(file).toString()),
+                              ),
+                      onDownload: () {
+                        if (provider.e2eeNeedsKey) {
+                          unawaited(_askE2eeKey(context, provider));
+                          return;
+                        }
+                        unawaited(provider.download(file));
+                      },
+                      onDelete: () => _confirmDeleteFile(
+                          context, provider, file.name, file.title),
+                    ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
-    ),
     );
   }
 
@@ -345,7 +355,8 @@ class _StorageView extends StatelessWidget {
     return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(item.displayTitle, maxLines: 2, overflow: TextOverflow.ellipsis),
+        title: Text(item.displayTitle,
+            maxLines: 2, overflow: TextOverflow.ellipsis),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -416,7 +427,8 @@ class _StorageView extends StatelessWidget {
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                   decoration: BoxDecoration(
                     color: TmpsColors.surface2,
                     borderRadius: BorderRadius.circular(99),
@@ -432,12 +444,16 @@ class _StorageView extends StatelessWidget {
                 ),
                 Text(
                   '${item.planName} · ${fmtSize(item.quotaBytes)}',
-                  style: const TextStyle(color: TmpsColors.muted, fontSize: 13.5),
+                  style:
+                      const TextStyle(color: TmpsColors.muted, fontSize: 13.5),
                 ),
                 if (provider.e2ee)
                   _StatusChip(
-                    text: provider.e2eeNeedsKey ? 'E2EE · нужен ключ' : 'E2EE · зашифровано',
-                    color: provider.e2eeNeedsKey ? TmpsColors.warn : TmpsColors.ok,
+                    text: provider.e2eeNeedsKey
+                        ? 'E2EE · нужен ключ'
+                        : 'E2EE · зашифровано',
+                    color:
+                        provider.e2eeNeedsKey ? TmpsColors.warn : TmpsColors.ok,
                   ),
                 if (item.hasPassword)
                   const _StatusChip(text: 'пароль', color: TmpsColors.muted),
@@ -456,7 +472,9 @@ class _StorageView extends StatelessWidget {
                   Expanded(
                     child: Text(
                       item.url.replaceFirst(RegExp(r'^https?://'), '') +
-                          (provider.shareUrl != item.url ? '#k=\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : ''),
+                          (provider.shareUrl != item.url
+                              ? '#k=\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022'
+                              : ''),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -472,7 +490,8 @@ class _StorageView extends StatelessWidget {
                     icon: const TmpsIcon(Ico.copy, size: 19),
                     tooltip: 'Копировать',
                     onPressed: () async {
-                      await Clipboard.setData(ClipboardData(text: provider.shareUrl));
+                      await Clipboard.setData(
+                          ClipboardData(text: provider.shareUrl));
                       if (context.mounted) {
                         _toast(context, 'Ссылка скопирована');
                       }
@@ -481,8 +500,8 @@ class _StorageView extends StatelessWidget {
                   IconButton(
                     icon: const TmpsIcon(Ico.share, size: 19),
                     tooltip: 'Поделиться',
-                    onPressed: () =>
-                        SharePlus.instance.share(ShareParams(text: provider.shareUrl)),
+                    onPressed: () => SharePlus.instance
+                        .share(ShareParams(text: provider.shareUrl)),
                   ),
                   IconButton(
                     icon: const TmpsIcon(Ico.external, size: 19),
@@ -548,7 +567,8 @@ class _StorageView extends StatelessWidget {
             const Text(
               'Имена и содержимое файлов шифруются на устройстве, сервер видит только шифртекст. '
               'Чтобы читать файлы и загружать новые, введите ключ: он есть в ссылке с «#k=…».',
-              style: TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
+              style:
+                  TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
             ),
             const SizedBox(height: 12),
             FilledButton(
@@ -632,7 +652,9 @@ class _StorageView extends StatelessWidget {
                 return Wrap(
                   spacing: gap,
                   runSpacing: gap,
-                  children: [for (final b in buttons) SizedBox(width: width, child: b)],
+                  children: [
+                    for (final b in buttons) SizedBox(width: width, child: b)
+                  ],
                 );
               },
             ),
@@ -678,8 +700,8 @@ class _StorageView extends StatelessWidget {
     );
   }
 
-  Future<void> _confirmDeleteFile(BuildContext context, StorageProvider provider,
-      String name, String title) async {
+  Future<void> _confirmDeleteFile(BuildContext context,
+      StorageProvider provider, String name, String title) async {
     final ok = await _confirm(context,
         title: 'Удалить «$title»?',
         text: 'Файл исчезнет у всех, у кого есть ссылка.',
@@ -753,7 +775,8 @@ class _StorageView extends StatelessWidget {
         final choice = await _askPassword(context, item.hasPassword);
         if (choice == null || !context.mounted) return;
         await _run(context, () async {
-          final updated = await storages.setPassword(item.code, choice.password);
+          final updated =
+              await storages.setPassword(item.code, choice.password);
           provider.applyItem(updated);
         }, choice.password == null ? 'Пароль убран' : 'Пароль сохранён');
         break;
@@ -765,8 +788,7 @@ class _StorageView extends StatelessWidget {
                 'Старая ссылка перестанет работать. Файлы останутся на месте.');
         if (!ok || !context.mounted) return;
         await _run(context, () async {
-          final updated = await storages.rotate(item.code);
-          provider.applyItem(updated);
+          await storages.rotate(item.code);
         }, 'Ссылка изменена');
         break;
 
@@ -802,7 +824,9 @@ class _StatusChip extends StatelessWidget {
         border: Border.all(color: color.withAlpha(102)),
         color: color.withAlpha(26),
       ),
-      child: Text(text, style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600)),
+      child: Text(text,
+          style: TextStyle(
+              color: color, fontSize: 12, fontWeight: FontWeight.w600)),
     );
   }
 }
@@ -814,7 +838,8 @@ class _PasswordChoice {
   final String? password;
 }
 
-Future<_PasswordChoice?> _askPassword(BuildContext context, bool hasPassword) async {
+Future<_PasswordChoice?> _askPassword(
+    BuildContext context, bool hasPassword) async {
   final controller = TextEditingController();
   final result = await showDialog<_PasswordChoice>(
     context: context,
@@ -826,7 +851,8 @@ Future<_PasswordChoice?> _askPassword(BuildContext context, bool hasPassword) as
         children: [
           const Text(
             'Гости вводят пароль при открытии ссылки. Вы заходите без пароля. Пароль хранится на сервере только в виде хэша.',
-            style: TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
+            style:
+                TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -834,7 +860,8 @@ Future<_PasswordChoice?> _askPassword(BuildContext context, bool hasPassword) as
             obscureText: true,
             autofocus: true,
             maxLength: 128,
-            decoration: const InputDecoration(labelText: 'Новый пароль, от 4 символов', counterText: ''),
+            decoration: const InputDecoration(
+                labelText: 'Новый пароль, от 4 символов', counterText: ''),
           ),
         ],
       ),
@@ -843,13 +870,16 @@ Future<_PasswordChoice?> _askPassword(BuildContext context, bool hasPassword) as
           FilledButton(
             onPressed: () {
               final value = controller.text;
-              if (value.length >= 4) Navigator.of(ctx).pop(_PasswordChoice(value));
+              if (value.length >= 4) {
+                Navigator.of(ctx).pop(_PasswordChoice(value));
+              }
             },
             child: const Text('Сохранить'),
           ),
           if (hasPassword)
             OutlinedButton(
-              onPressed: () => Navigator.of(ctx).pop(const _PasswordChoice(null)),
+              onPressed: () =>
+                  Navigator.of(ctx).pop(const _PasswordChoice(null)),
               child: const Text('Убрать пароль'),
             ),
           TextButton(
@@ -878,13 +908,15 @@ Future<void> _askE2eeKey(BuildContext context, StorageProvider provider) async {
         children: [
           const Text(
             'Хранилище зашифровано, ключа на этом устройстве нет. Вставьте полную ссылку с «#k=…» или сам ключ.',
-            style: TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
+            style:
+                TextStyle(color: TmpsColors.muted, height: 1.4, fontSize: 13),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: controller,
             autofocus: true,
-            decoration: const InputDecoration(labelText: 'Ссылка с ключом или ключ'),
+            decoration:
+                const InputDecoration(labelText: 'Ссылка с ключом или ключ'),
           ),
         ],
       ),
@@ -908,7 +940,10 @@ Future<void> _askE2eeKey(BuildContext context, StorageProvider provider) async {
   final ok = await provider.setE2eeKey(text);
   if (!context.mounted) return;
   ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(ok ? 'Ключ принят, файлы расшифрованы' : 'Ключ не подходит к этому хранилищу')),
+    SnackBar(
+        content: Text(ok
+            ? 'Ключ принят, файлы расшифрованы'
+            : 'Ключ не подходит к этому хранилищу')),
   );
 }
 
@@ -1052,7 +1087,10 @@ class _ActionButton extends StatelessWidget {
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                    fontSize: 12.5, fontWeight: FontWeight.w600, color: color, height: 1.2),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: color,
+                    height: 1.2),
               ),
             ],
           ),

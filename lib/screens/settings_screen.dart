@@ -1,5 +1,6 @@
 import 'dart:async';
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -76,7 +77,8 @@ Future<T?> _pickValue<T>(
         children: [
           const SizedBox(height: 16),
           Text(title,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+              style:
+                  const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           const SizedBox(height: 10),
           for (final option in options)
             ListTile(
@@ -117,6 +119,43 @@ Future<void> _pickLead(BuildContext context, AppProvider app) async {
 
 void _say(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+}
+
+Future<bool> _confirmKeyWipe(BuildContext context, AppProvider app) async {
+  final hasKeys = await app.secureStore.hasE2eeKeys();
+  if (!context.mounted || !hasKeys) return context.mounted;
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Выйти и удалить локальные ключи?'),
+      content: const Text(
+        'На этом телефоне есть ключи E2EE. После выхода они будут удалены: '
+        'без сохранённых ссылок с «#k=…» расшифровать файлы больше не получится.',
+        style: TextStyle(color: TmpsColors.muted, height: 1.45),
+      ),
+      actions: [
+        DialogActions(children: [
+          TextButton(
+            style: DialogActions.dangerStyle(ctx),
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Выйти и удалить'),
+          ),
+          TextButton(
+            style: DialogActions.cancelStyle(ctx),
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Отмена'),
+          ),
+        ]),
+      ],
+    ),
+  );
+  return confirmed == true;
+}
+
+Future<void> _signOut(BuildContext context, AppProvider app) async {
+  if (!await _confirmKeyWipe(context, app) || !context.mounted) return;
+  await app.signOut();
+  if (context.mounted) Navigator.of(context).popUntil((route) => route.isFirst);
 }
 
 class SettingsScreen extends StatefulWidget {
@@ -173,7 +212,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         content: Text(
           device.current
               ? 'Это текущее устройство. Приложение выйдет из аккаунта.'
-              : 'Приложение на этом телефоне выйдет из аккаунта.',
+              : 'Выбранное устройство потеряет доступ к аккаунту. Этот телефон останется подключённым.',
           style: const TextStyle(color: TmpsColors.muted, height: 1.45),
         ),
         actions: [
@@ -192,12 +231,18 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ],
       ),
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
+    if (device.current) {
+      if (!await _confirmKeyWipe(context, app)) return;
+      if (!mounted) return;
+    }
     try {
       await app.revokeDevice(device.id);
       if (device.current) {
         await app.signOut();
-        if (mounted) Navigator.of(context).popUntil((route) => route.isFirst);
+        if (mounted) {
+          Navigator.of(context).popUntil((route) => route.isFirst);
+        }
         return;
       }
 
@@ -319,7 +364,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   title: const Text('Автоблокировка'),
                   subtitle: Text(
                     '${_autoLockLabel(app.autoLockMinutes)}. Блокирует приложение при бездействии и после сворачивания',
-                    style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+                    style: const TextStyle(
+                        color: TmpsColors.muted, fontSize: 12.5),
                   ),
                   onTap: () => _pickAutoLock(context, app),
                 ),
@@ -436,9 +482,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       if (!context.mounted) return;
                       ScaffoldMessenger.of(context).showSnackBar(
                         SnackBar(
-                            content: Text(app.update == null
-                                ? 'У вас последняя версия'
-                                : 'Доступна версия ${app.update!.version}')),
+                            content: Text(app.updateError != null
+                                ? app.updateError!
+                                : app.update == null
+                                    ? 'У вас последняя версия'
+                                    : 'Доступна версия ${app.update!.version}')),
                       );
                     },
                   ),
@@ -455,12 +503,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ),
           const SizedBox(height: 22),
           OutlinedButton.icon(
-            onPressed: () async {
-              await app.signOut();
-              if (context.mounted) {
-                Navigator.of(context).popUntil((route) => route.isFirst);
-              }
-            },
+            onPressed: () => _signOut(context, app),
             icon: const TmpsIcon(Ico.logout, color: TmpsColors.danger),
             label:
                 const Text('Выйти', style: TextStyle(color: TmpsColors.danger)),

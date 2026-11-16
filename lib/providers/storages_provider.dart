@@ -4,26 +4,64 @@ import 'package:flutter/foundation.dart';
 
 import '../models/storage.dart';
 import '../services/api_client.dart';
+import '../services/download_service.dart';
+import '../services/node_service.dart';
+import '../services/secure_store.dart';
 import '../services/storage_service.dart';
+import 'storage_provider.dart';
 
 class StoragesProvider extends ChangeNotifier {
-  StoragesProvider(this._service, {this.onChanged, Stream<String>? events}) {
+  StoragesProvider(
+    this._service, {
+    this.onChanged,
+    Stream<String>? events,
+    SecureStore? secure,
+  }) : _secure = secure ?? SecureStore() {
     // Хранилище создали, изменили или удалили в другом клиенте: список обновляется сам.
     _eventsSubscription = events?.listen((type) {
       if (type != 'storages') return;
       _refreshTimer?.cancel();
-      _refreshTimer = Timer(const Duration(milliseconds: 300), () => unawaited(load(silent: true)));
+      _refreshTimer = Timer(const Duration(milliseconds: 300),
+          () => unawaited(load(silent: true)));
     });
   }
 
   final StorageService _service;
+  final SecureStore _secure;
   StreamSubscription<String>? _eventsSubscription;
   Timer? _refreshTimer;
+  final Map<String, StorageProvider> _sessions = {};
+  int _loadGeneration = 0;
+  bool _disposed = false;
+
+  /// Один живой provider на хранилище: выход из Route не останавливает передачи.
+  StorageProvider providerFor(StorageItem item) {
+    final existing = _sessions[item.code];
+    if (existing != null) {
+      existing.applyItem(item);
+      return existing;
+    }
+    final created = StorageProvider(
+      storages: _service,
+      node: NodeService(),
+      initial: item,
+      secure: _secure,
+    );
+    _sessions[item.code] = created;
+    unawaited(created.initialize());
+    return created;
+  }
 
   @override
   void dispose() {
+    _disposed = true;
+    _loadGeneration++;
     _refreshTimer?.cancel();
     _eventsSubscription?.cancel();
+    for (final session in _sessions.values) {
+      session.dispose();
+    }
+    _sessions.clear();
     super.dispose();
   }
 
@@ -40,20 +78,25 @@ class StoragesProvider extends ChangeNotifier {
   String? get error => _error;
 
   Future<void> load({bool silent = false}) async {
+    final generation = ++_loadGeneration;
     if (!silent) {
       _loading = true;
       _error = null;
-      notifyListeners();
+      if (!_disposed) notifyListeners();
     }
     try {
-      _items = await _service.list();
+      final items = await _service.list();
+      if (_disposed || generation != _loadGeneration) return;
+      _items = items;
       _error = null;
       onChanged?.call(_items);
     } on ApiException catch (e) {
-      _error = e.message;
+      if (!_disposed && generation == _loadGeneration) _error = e.message;
     } finally {
-      _loading = false;
-      notifyListeners();
+      if (!_disposed && generation == _loadGeneration) {
+        _loading = false;
+        notifyListeners();
+      }
     }
   }
 
@@ -82,7 +125,8 @@ class StoragesProvider extends ChangeNotifier {
     String? title,
     String? e2eeCheck,
   }) async {
-    final item = await _service.create(plan: plan, ttlHours: ttlHours, title: title, e2eeCheck: e2eeCheck);
+    final item = await _service.create(
+        plan: plan, ttlHours: ttlHours, title: title, e2eeCheck: e2eeCheck);
     replace(item);
     return item;
   }
@@ -119,13 +163,41 @@ class StoragesProvider extends ChangeNotifier {
 
   Future<StorageItem> rotate(String code) async {
     final item = await _service.rotate(code);
+    Object? migrationError;
+    try {
+      await _secure.moveStorageData(code, item.code);
+    } catch (error) {
+      migrationError = error;
+    }
+
+    final session = _sessions.remove(code);
+    if (session != null) {
+      session.applyRotatedItem(item);
+      _sessions[item.code] = session;
+    }
     removeLocal(code);
     replace(item);
+    if (migrationError != null) {
+      throw ApiException(
+        'Ссылка изменена, но локальные данные перенесены не полностью. '
+        'Не закрывайте приложение и проверьте ключ шифрования и передачи',
+      );
+    }
     return item;
   }
 
   Future<void> remove(String code) async {
     await _service.remove(code);
+    final session = _sessions.remove(code);
+    if (session != null) {
+      await session.cancelAll();
+      await session.cancelAllDownloads();
+      session.dispose();
+    }
+    await DownloadService.cancelStorage(code);
+    try {
+      await _secure.deleteStorageData(code);
+    } catch (_) {}
     removeLocal(code);
   }
 }

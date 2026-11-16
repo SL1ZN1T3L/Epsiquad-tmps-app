@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+// ignore: deprecated_member_use
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -36,6 +37,7 @@ class StoragesScreen extends StatelessWidget {
         app.storages,
         onChanged: (items) => unawaited(app.syncReminders(items)),
         events: app.events,
+        secure: app.secureStore,
       )..load(),
       child: const _StoragesView(),
     );
@@ -61,7 +63,8 @@ class _StoragesView extends StatelessWidget {
     final request = await showModalBottomSheet<_CreateRequest>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _CreateSheet(plans: plans, e2eeAvailable: config.e2eeAvailable),
+      builder: (_) =>
+          _CreateSheet(plans: plans, e2eeAvailable: config.e2eeAvailable),
     );
     if (request == null || !context.mounted) return;
     try {
@@ -91,7 +94,8 @@ class _StoragesView extends StatelessWidget {
     }
   }
 
-  Future<void> _showKeyNotice(BuildContext context, StorageItem item, String key) {
+  Future<void> _showKeyNotice(
+      BuildContext context, StorageItem item, String key) {
     final link = '${item.url}#k=$key';
     return showDialog<void>(
       context: context,
@@ -110,7 +114,9 @@ class _StoragesView extends StatelessWidget {
               onPressed: () async {
                 await Clipboard.setData(ClipboardData(text: link));
                 if (ctx.mounted) Navigator.of(ctx).pop();
-                if (context.mounted) _toast(context, 'Ссылка с ключом скопирована');
+                if (context.mounted) {
+                  _toast(context, 'Ссылка с ключом скопирована');
+                }
               },
               child: const Text('Копировать ссылку с ключом'),
             ),
@@ -141,60 +147,60 @@ class _StoragesView extends StatelessWidget {
 
     return _ShareGate(
       child: PopScope(
-      canPop: false,
-      onPopInvokedWithResult: (didPop, result) {
-        if (!didPop) _confirmExit(context);
-      },
-      child: Scaffold(
-        appBar: AppBar(
-          titleSpacing: 20,
-          title: const Row(
-            children: [
-              BrandMark(size: 30, withText: false),
-              SizedBox(width: 10),
-              Text('Хранилища'),
+        canPop: false,
+        onPopInvokedWithResult: (didPop, result) {
+          if (!didPop) _confirmExit(context);
+        },
+        child: Scaffold(
+          appBar: AppBar(
+            titleSpacing: 20,
+            title: const Row(
+              children: [
+                BrandMark(size: 30, withText: false),
+                SizedBox(width: 10),
+                Text('Хранилища'),
+              ],
+            ),
+            actions: [
+              IconButton(
+                tooltip: 'Настройки',
+                icon: const TmpsIcon(Ico.settings),
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                ),
+              ),
+              const SizedBox(width: 6),
             ],
           ),
-          actions: [
-            IconButton(
-              tooltip: 'Настройки',
-              icon: const TmpsIcon(Ico.settings),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
-              ),
-            ),
-            const SizedBox(width: 6),
-          ],
-        ),
-        floatingActionButton: app.devMode || canCreate
-            ? Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  if (app.devMode) ...[
-                    const DevModeMenu(),
-                    const SizedBox(height: 12),
+          floatingActionButton: app.devMode || canCreate
+              ? Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    if (app.devMode) ...[
+                      const DevModeMenu(),
+                      const SizedBox(height: 12),
+                    ],
+                    if (canCreate)
+                      FloatingActionButton.extended(
+                        heroTag: 'create-storage',
+                        onPressed: () => _create(context),
+                        backgroundColor: TmpsColors.accent,
+                        foregroundColor: Colors.white,
+                        icon: const TmpsIcon(Ico.plus),
+                        label: const Text('Создать'),
+                      ),
                   ],
-                  if (canCreate)
-                    FloatingActionButton.extended(
-                      heroTag: 'create-storage',
-                      onPressed: () => _create(context),
-                      backgroundColor: TmpsColors.accent,
-                      foregroundColor: Colors.white,
-                      icon: const TmpsIcon(Ico.plus),
-                      label: const Text('Создать'),
-                    ),
-                ],
-              )
-            : null,
-        body: RefreshIndicator(
-          color: TmpsColors.accent,
-          backgroundColor: TmpsColors.surface,
-          onRefresh: () => provider.load(silent: true),
-          child: _body(context, app, provider, items, limit, admin),
+                )
+              : null,
+          body: RefreshIndicator(
+            color: TmpsColors.accent,
+            backgroundColor: TmpsColors.surface,
+            onRefresh: () => provider.load(silent: true),
+            child: _body(context, app, provider, items, limit, admin),
+          ),
         ),
       ),
-    ),
     );
   }
 
@@ -270,6 +276,41 @@ class _StoragesView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 96),
       children: [
+        if (app.config == null)
+          Card(
+            child: ListTile(
+              leading: const TmpsIcon(Ico.cloudOff, color: TmpsColors.warn),
+              title: const Text('Настройки сервера не получены'),
+              subtitle: const Text(
+                'Создание хранилищ и проверка обновлений временно недоступны.',
+                style: TextStyle(color: TmpsColors.muted),
+              ),
+              trailing: IconButton(
+                tooltip: 'Повторить',
+                onPressed: app.refreshConfig,
+                icon: const TmpsIcon(Ico.refresh, color: TmpsColors.accent),
+              ),
+            ),
+          ),
+        if (app.pendingShare.isNotEmpty && app.shareDeferred)
+          Card(
+            child: ListTile(
+              leading: const TmpsIcon(Ico.upload, color: TmpsColors.accent),
+              title: Text(
+                'Ждут загрузки: ${app.pendingShare.length} '
+                '${plural(app.pendingShare.length, 'файл', 'файла', 'файлов')}',
+              ),
+              subtitle: const Text(
+                'Файлы из «Поделиться» сохранены. Выберите хранилище, когда будете готовы.',
+                style: TextStyle(color: TmpsColors.muted),
+              ),
+              trailing: IconButton(
+                tooltip: 'Выбрать хранилище',
+                onPressed: app.retryShare,
+                icon: const TmpsIcon(Ico.refresh, color: TmpsColors.accent),
+              ),
+            ),
+          ),
         if (app.outdated) _updateBanner(context, app, required: true),
         if (!app.outdated && app.update != null)
           _updateBanner(context, app, required: false),
@@ -288,7 +329,8 @@ class _StoragesView extends StatelessWidget {
             child: EmptyState(
               icon: Ico.box,
               title: 'Пока пусто',
-              subtitle: 'Создайте хранилище, загрузите файлы и отправьте короткую ссылку.',
+              subtitle:
+                  'Создайте хранилище, загрузите файлы и отправьте короткую ссылку.',
               action: canCreate
                   ? FilledButton.icon(
                       onPressed: () => _create(context),
@@ -361,7 +403,8 @@ class _StoragesView extends StatelessWidget {
                 Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    TmpsIcon(required ? Ico.warning : Ico.download, color: color),
+                    TmpsIcon(required ? Ico.warning : Ico.download,
+                        color: color),
                     const SizedBox(width: 12),
                     Expanded(child: text),
                   ],
@@ -405,54 +448,78 @@ class _ShareGateState extends State<_ShareGate> {
   bool _busy = false;
 
   Future<void> _handle() async {
-    if (!mounted) {
-      _busy = false;
-      return;
-    }
+    if (!mounted) return;
     final app = context.read<AppProvider>();
     final provider = context.read<StoragesProvider>();
-    final files = app.takeShare();
+    final files = app.pendingShare;
     if (files.isEmpty) {
       _busy = false;
       return;
     }
 
-    // Список хранилищ мог ещё не успеть загрузиться.
-    for (var i = 0; i < 40 && provider.items.isEmpty && provider.loading; i++) {
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+    try {
+      // Список хранилищ мог ещё не успеть загрузиться.
+      for (var i = 0;
+          i < 40 && provider.items.isEmpty && provider.loading;
+          i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        if (!mounted) return;
+      }
+      if (provider.items.isEmpty) {
+        app.deferShare();
+        showAppToast(
+            'Нет хранилищ, куда можно загрузить файлы. Создайте хранилище и повторите');
+        return;
+      }
+
+      final item = await showModalBottomSheet<StorageItem>(
+        context: context,
+        builder: (ctx) =>
+            _ShareTargetSheet(files: files, items: provider.items),
+      );
       if (!mounted) return;
-    }
-    if (provider.items.isEmpty) {
-      _busy = false;
-      showAppToast('Нет хранилищ, куда можно загрузить файлы. Создайте хранилище и повторите');
-      return;
-    }
+      if (item == null) {
+        app.deferShare();
+        return;
+      }
 
-    final item = await showModalBottomSheet<StorageItem>(
-      context: context,
-      builder: (ctx) => _ShareTargetSheet(files: files, items: provider.items),
-    );
-    _busy = false;
-    if (item == null || !mounted) return;
-
-    final sources = [
-      for (final file in files)
-        UploadSource(
-          name: file.name,
-          size: file.size,
-          path: file.path,
-          openStream: () => File(file.path).openRead(),
+      final sources = [
+        for (final file in files)
+          UploadSource(
+            name: file.name,
+            size: file.size,
+            path: file.path,
+            openStream: () => File(file.path).openRead(),
+          ),
+      ];
+      await Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => StorageScreen(
+          item: item,
+          storages: provider,
+          uploads: sources,
+          onUploadsEnqueued: () => app.completeShare(files),
         ),
-    ];
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => StorageScreen(item: item, storages: provider, uploads: sources),
-    ));
+      ));
+    } finally {
+      _busy = false;
+      if (mounted && app.pendingShare.isNotEmpty && !app.shareDeferred) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && !_busy) {
+            _busy = true;
+            _handle();
+          }
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final app = context.watch<AppProvider>();
-    if (app.pendingShare.isNotEmpty && !app.autoLocked && !_busy) {
+    if (app.pendingShare.isNotEmpty &&
+        !app.shareDeferred &&
+        !app.autoLocked &&
+        !_busy) {
       _busy = true;
       WidgetsBinding.instance.addPostFrameCallback((_) => _handle());
     }
@@ -492,7 +559,8 @@ class _ShareTargetSheet extends StatelessWidget {
                 title: Text(item.displayTitle, overflow: TextOverflow.ellipsis),
                 subtitle: Text(
                   '${item.code} · свободно ${fmtSize(item.freeBytes)}',
-                  style: const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
+                  style:
+                      const TextStyle(color: TmpsColors.muted, fontSize: 12.5),
                 ),
                 onTap: () => Navigator.of(context).pop(item),
               ),
@@ -505,7 +573,8 @@ class _ShareTargetSheet extends StatelessWidget {
 }
 
 class _CreateRequest {
-  const _CreateRequest({required this.plan, this.ttlHours, this.title, this.e2ee = false});
+  const _CreateRequest(
+      {required this.plan, this.ttlHours, this.title, this.e2ee = false});
 
   final String plan;
   final int? ttlHours;
@@ -581,10 +650,12 @@ class _CreateSheetState extends State<_CreateSheet> {
                     ),
                     const SizedBox(height: 18),
                     const Text('Новое хранилище',
-                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                        style: TextStyle(
+                            fontSize: 20, fontWeight: FontWeight.w700)),
                     const SizedBox(height: 18),
                     const Text('Тариф',
-                        style: TextStyle(color: TmpsColors.muted, fontSize: 13.5)),
+                        style:
+                            TextStyle(color: TmpsColors.muted, fontSize: 13.5)),
                     const SizedBox(height: 8),
                     for (final plan in widget.plans) ...[
                       _PlanTile(
@@ -597,7 +668,8 @@ class _CreateSheetState extends State<_CreateSheet> {
                     if (_plan.ttlOptions.isNotEmpty) ...[
                       const SizedBox(height: 8),
                       const Text('Срок хранения',
-                          style: TextStyle(color: TmpsColors.muted, fontSize: 13.5)),
+                          style: TextStyle(
+                              color: TmpsColors.muted, fontSize: 13.5)),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
@@ -605,13 +677,16 @@ class _CreateSheetState extends State<_CreateSheet> {
                         children: [
                           for (final hours in _plan.ttlOptions)
                             ChoiceChip(
-                              label: Text(hours < 24 ? '$hours ч' : _daysLabel(hours)),
+                              label: Text(
+                                  hours < 24 ? '$hours ч' : _daysLabel(hours)),
                               selected: _ttl == hours,
                               onSelected: (_) => setState(() => _ttl = hours),
                               backgroundColor: TmpsColors.surface2,
                               selectedColor: TmpsColors.accent,
                               labelStyle: TextStyle(
-                                color: _ttl == hours ? Colors.white : TmpsColors.text,
+                                color: _ttl == hours
+                                    ? Colors.white
+                                    : TmpsColors.text,
                                 fontWeight: FontWeight.w600,
                               ),
                               side: const BorderSide(color: TmpsColors.border),
@@ -625,7 +700,9 @@ class _CreateSheetState extends State<_CreateSheet> {
                               ? 'Продлить можно позже, суммарно до ${_hoursLabel(_plan.maxLifetimeHours!)} с момента создания.'
                               : 'Этот тариф не продлевается.',
                           style: const TextStyle(
-                              color: TmpsColors.muted, fontSize: 12.5, height: 1.4),
+                              color: TmpsColors.muted,
+                              fontSize: 12.5,
+                              height: 1.4),
                         ),
                       ],
                     ],
@@ -647,7 +724,10 @@ class _CreateSheetState extends State<_CreateSheet> {
                         title: const Text('Сквозное шифрование (E2EE)'),
                         subtitle: const Text(
                           'Файлы и их имена шифруются на устройстве.',
-                          style: TextStyle(color: TmpsColors.muted, fontSize: 13, height: 1.35),
+                          style: TextStyle(
+                              color: TmpsColors.muted,
+                              fontSize: 13,
+                              height: 1.35),
                         ),
                       ),
                       if (_e2ee)
@@ -662,9 +742,15 @@ class _CreateSheetState extends State<_CreateSheet> {
                           child: const Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _E2eeWarning(icon: Ico.key, text: 'Ключ нельзя восстановить. Сохраните ссылку с ключом после создания.'),
+                              _E2eeWarning(
+                                  icon: Ico.key,
+                                  text:
+                                      'Ключ нельзя восстановить. Сохраните ссылку с ключом после создания.'),
                               SizedBox(height: 9),
-                              _E2eeWarning(icon: Ico.eyeOff, text: 'Предпросмотр и скачивание архивом будут недоступны.'),
+                              _E2eeWarning(
+                                  icon: Ico.eyeOff,
+                                  text:
+                                      'Предпросмотр и скачивание архивом будут недоступны.'),
                             ],
                           ),
                         ),
@@ -678,7 +764,10 @@ class _CreateSheetState extends State<_CreateSheet> {
             FilledButton(
               onPressed: () => Navigator.of(context).pop(
                 _CreateRequest(
-                    plan: _plan.id, ttlHours: _ttl, title: _title.text, e2ee: _e2ee),
+                    plan: _plan.id,
+                    ttlHours: _ttl,
+                    title: _title.text,
+                    e2ee: _e2ee),
               ),
               child: const Text('Создать'),
             ),
@@ -730,7 +819,8 @@ class _E2eeWarning extends StatelessWidget {
         Expanded(
           child: Text(
             text,
-            style: const TextStyle(color: TmpsColors.text, fontSize: 13, height: 1.35),
+            style: const TextStyle(
+                color: TmpsColors.text, fontSize: 13, height: 1.35),
           ),
         ),
       ],

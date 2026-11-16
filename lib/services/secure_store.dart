@@ -26,6 +26,8 @@ class SecureStore {
   static const _kDeviceId = 'device_id';
   static const _kBiometric = 'biometric_enabled';
   static const _kE2eePrefix = 'e2ee.key.';
+  static const _kUploadPrefix = 'upload.v1.';
+  static const _kDownloadPrefix = 'download.v1.';
 
   static const int iterations = 120000;
   static const int maxAttempts = 10;
@@ -37,8 +39,10 @@ class SecureStore {
   final _gcm = AesGcm.with256bits();
 
   SecretKey? _key;
+  int _wipeGeneration = 0;
 
   bool get unlocked => _key != null;
+  int get wipeGeneration => _wipeGeneration;
 
   void lock() => _key = null;
 
@@ -50,7 +54,8 @@ class SecureStore {
   }
 
   Future<SecretKey> _derive(String pin, List<int> salt) {
-    final kdf = Pbkdf2(macAlgorithm: Hmac.sha256(), iterations: iterations, bits: 256);
+    final kdf =
+        Pbkdf2(macAlgorithm: Hmac.sha256(), iterations: iterations, bits: 256);
     return kdf.deriveKeyFromPassword(password: pin, nonce: salt);
   }
 
@@ -72,7 +77,9 @@ class SecureStore {
     await _storage.delete(key: _kFails);
     _key = key;
     await writeRefreshToken(refreshToken);
-    if (await biometricEnabled()) await _storage.write(key: _kMirror, value: pin);
+    if (await biometricEnabled()) {
+      await _storage.write(key: _kMirror, value: pin);
+    }
   }
 
   Future<bool> openWithPin(String pin) async {
@@ -94,7 +101,8 @@ class SecureStore {
     return true;
   }
 
-  Future<bool> openWithBiometrics({String reason = 'Подтвердите вход в tmps'}) async {
+  Future<bool> openWithBiometrics(
+      {String reason = 'Подтвердите вход в tmps'}) async {
     if (!await authenticate(reason: reason)) return false;
     final pin = await _storage.read(key: _kMirror);
     if (pin == null) return false;
@@ -106,7 +114,8 @@ class SecureStore {
     final raw = await _storage.read(key: _kBox);
     if (key == null || raw == null) return null;
     try {
-      final box = SecretBox.fromConcatenation(base64Decode(raw), nonceLength: 12, macLength: 16);
+      final box = SecretBox.fromConcatenation(base64Decode(raw),
+          nonceLength: 12, macLength: 16);
       final clear = await _gcm.decrypt(box, secretKey: key);
       return utf8.decode(clear);
     } catch (_) {
@@ -126,27 +135,146 @@ class SecureStore {
   // ---- Ключи сквозного шифрования хранилищ ----
 
   /// Ключ E2EE-хранилища (base64url). Лежит в защищённом хранилище Android, по одному на код хранилища.
-  Future<String?> readE2eeKey(String code) => _storage.read(key: '$_kE2eePrefix$code');
+  Future<String?> readE2eeKey(String code) =>
+      _storage.read(key: '$_kE2eePrefix$code');
 
-  Future<void> writeE2eeKey(String code, String key) => _storage.write(key: '$_kE2eePrefix$code', value: key);
+  Future<void> writeE2eeKey(String code, String key) =>
+      _storage.write(key: '$_kE2eePrefix$code', value: key);
 
-  Future<void> deleteE2eeKey(String code) => _storage.delete(key: '$_kE2eePrefix$code');
+  Future<void> deleteE2eeKey(String code) =>
+      _storage.delete(key: '$_kE2eePrefix$code');
 
-  Future<void> _wipeE2eeKeys() async {
+  Future<bool> hasE2eeKeys() async {
+    try {
+      final all = await _storage.readAll();
+      return all.keys.any((key) => key.startsWith(_kE2eePrefix));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Смена кода хранилища не должна отрезать устройство от его E2EE-ключа.
+  /// Сначала записываем новую копию, и только потом удаляем старую.
+  Future<void> moveE2eeKey(String oldCode, String newCode) async {
+    if (oldCode == newCode) return;
+    final key = await readE2eeKey(oldCode);
+    if (key == null) return;
+    await writeE2eeKey(newCode, key);
+    await deleteE2eeKey(oldCode);
+  }
+
+  // ---- Восстановление передач ----
+
+  /// Метаданные загрузок содержат локальные пути и E2EE-имена, поэтому хранятся
+  /// только здесь, а не в обычных SharedPreferences.
+  Future<List<Map<String, dynamic>>> readUploadTasks(String code) async {
+    final raw = await _storage.read(key: '$_kUploadPrefix$code');
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return [
+        for (final entry in decoded)
+          if (entry is Map) Map<String, dynamic>.from(entry),
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<void> writeUploadTasks(
+      String code, List<Map<String, dynamic>> tasks) async {
+    final key = '$_kUploadPrefix$code';
+    if (tasks.isEmpty) {
+      await _storage.delete(key: key);
+    } else {
+      await _storage.write(key: key, value: jsonEncode(tasks));
+    }
+  }
+
+  Future<void> deleteUploadTasks(String code) =>
+      _storage.delete(key: '$_kUploadPrefix$code');
+
+  Future<List<Map<String, dynamic>>> readDownloadRecords() async {
+    final all = await _storage.readAll();
+    final records = <Map<String, dynamic>>[];
+    for (final entry in all.entries) {
+      if (!entry.key.startsWith(_kDownloadPrefix)) continue;
+      try {
+        final decoded = jsonDecode(entry.value);
+        if (decoded is Map) records.add(Map<String, dynamic>.from(decoded));
+      } catch (_) {}
+    }
+    return records;
+  }
+
+  Future<Map<String, dynamic>?> readDownloadRecord(String taskId) async {
+    final raw = await _storage.read(key: '$_kDownloadPrefix$taskId');
+    if (raw == null) return null;
+    try {
+      final decoded = jsonDecode(raw);
+      return decoded is Map ? Map<String, dynamic>.from(decoded) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> writeDownloadRecord(
+          String taskId, Map<String, dynamic> record) =>
+      _storage.write(
+          key: '$_kDownloadPrefix$taskId', value: jsonEncode(record));
+
+  Future<void> deleteDownloadRecord(String taskId) =>
+      _storage.delete(key: '$_kDownloadPrefix$taskId');
+
+  Future<void> moveStorageData(String oldCode, String newCode) async {
+    if (oldCode == newCode) return;
+    await moveE2eeKey(oldCode, newCode);
+    final uploads = await readUploadTasks(oldCode);
+    if (uploads.isNotEmpty) {
+      await writeUploadTasks(newCode, uploads);
+    }
+    await deleteUploadTasks(oldCode);
+    final downloads = await readDownloadRecords();
+    for (final record in downloads) {
+      if (record['storageCode'] != oldCode) continue;
+      final taskId = record['taskId'];
+      if (taskId is! String) continue;
+      await writeDownloadRecord(taskId, {...record, 'storageCode': newCode});
+    }
+  }
+
+  Future<void> deleteStorageData(String code) async {
+    await deleteE2eeKey(code);
+    await deleteUploadTasks(code);
+    final downloads = await readDownloadRecords();
+    for (final record in downloads) {
+      if (record['storageCode'] != code) continue;
+      final taskId = record['taskId'];
+      if (taskId is String) await deleteDownloadRecord(taskId);
+    }
+  }
+
+  Future<void> _wipeTransferData() async {
     try {
       final all = await _storage.readAll();
       for (final key in all.keys) {
-        if (key.startsWith(_kE2eePrefix)) await _storage.delete(key: key);
+        if (key.startsWith(_kE2eePrefix) ||
+            key.startsWith(_kUploadPrefix) ||
+            key.startsWith(_kDownloadPrefix)) {
+          await _storage.delete(key: key);
+        }
       }
     } catch (_) {}
   }
 
   Future<void> wipe() async {
+    _wipeGeneration++;
     _key = null;
     for (final key in [_kBox, _kSalt, _kCheck, _kMirror, _kFails]) {
       await _storage.delete(key: key);
     }
-    await _wipeE2eeKeys();
+    await _wipeTransferData();
     await setBiometricEnabled(false);
   }
 
