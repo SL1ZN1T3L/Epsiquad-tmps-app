@@ -134,12 +134,14 @@ class TelegramLogin {
   const TelegramLogin({
     required this.token,
     required this.nonce,
+    required this.code,
     required this.url,
     required this.expiresIn,
   });
 
   final String token;
   final String nonce;
+  final String code;
   final String url;
   final int expiresIn;
 
@@ -147,6 +149,7 @@ class TelegramLogin {
     return TelegramLogin(
       token: json['token'] as String? ?? '',
       nonce: json['nonce'] as String? ?? '',
+      code: json['code'] as String? ?? '',
       url: json['url'] as String? ?? '',
       expiresIn: (json['expires_in'] as num?)?.toInt() ?? 300,
     );

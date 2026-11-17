@@ -565,6 +565,16 @@ class AppProvider extends ChangeNotifier {
     );
   }
 
+  Future<LoginResult> loginWithTotp(String challenge, String code) {
+    return auth.loginWithTotp(
+      challenge: challenge,
+      code: code,
+      deviceId: _deviceId,
+      deviceName: _deviceName,
+      appVersion: _appVersion,
+    );
+  }
+
   Future<TelegramLogin> telegramStart() {
     return auth.telegramStart(
       deviceId: _deviceId,

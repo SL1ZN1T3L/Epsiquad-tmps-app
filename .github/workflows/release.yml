@@ -83,6 +83,8 @@ jobs:
           B="https://img.shields.io/badge"
           S="logo=android&logoColor=3DDC84&labelColor=2b3038"
           {
+            echo "[![Загрузки релиза](https://img.shields.io/github/downloads/$REPO/$TAG/total?style=flat-square&logo=github)](https://github.com/$REPO/releases/tag/$TAG)"
+            echo
             echo "## Скачать"
             echo
             echo "| Устройство | Файл |"

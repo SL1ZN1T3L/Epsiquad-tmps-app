@@ -1,11 +1,15 @@
 package com.epsiquad.tmps
 
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.ContentUris
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ResolveInfo
 import android.provider.OpenableColumns
 import android.view.WindowManager
 import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
@@ -273,6 +277,51 @@ class MainActivity : FlutterFragmentActivity() {
         }
     }
 
+    private fun linkIntent(url: String): Intent =
+        Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE)
+
+    private fun linkIcon(info: ResolveInfo): ByteArray {
+        val drawable = info.loadIcon(packageManager)
+        val width = drawable.intrinsicWidth.coerceAtLeast(1).coerceAtMost(192)
+        val height = drawable.intrinsicHeight.coerceAtLeast(1).coerceAtMost(192)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, width, height)
+        drawable.draw(canvas)
+        val output = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+        bitmap.recycle()
+        return output.toByteArray()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun linkTargets(url: String): List<Map<String, Any>> {
+        val activities = if (Build.VERSION.SDK_INT >= 33) {
+            packageManager.queryIntentActivities(
+                linkIntent(url),
+                PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_ALL.toLong())
+            )
+        } else {
+            packageManager.queryIntentActivities(linkIntent(url), PackageManager.MATCH_ALL)
+        }
+        return activities
+            .sortedBy { it.loadLabel(packageManager).toString().lowercase(Locale.getDefault()) }
+            .map { info ->
+                mapOf(
+                    "label" to info.loadLabel(packageManager).toString(),
+                    "packageName" to info.activityInfo.packageName,
+                    "activityName" to info.activityInfo.name,
+                    "icon" to linkIcon(info)
+                )
+            }
+    }
+
+    private fun openLinkTarget(url: String, packageName: String, activityName: String): Boolean {
+        val target = linkIntent(url).setComponent(ComponentName(packageName, activityName))
+        startActivity(target)
+        return true
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.epsiquad.tmps/pdf")
@@ -336,11 +385,40 @@ class MainActivity : FlutterFragmentActivity() {
 
         MethodChannel(messenger, "com.epsiquad.tmps/system")
             .setMethodCallHandler { call, result ->
-                if (call.method == "setHideRecents") {
-                    applyRecentsPrivacy(call.argument<Boolean>("hide") ?: true)
-                    result.success(null)
-                } else {
-                    result.notImplemented()
+                when (call.method) {
+                    "setHideRecents" -> {
+                        applyRecentsPrivacy(call.argument<Boolean>("hide") ?: true)
+                        result.success(null)
+                    }
+                    "getLinkTargets" -> {
+                        val url = call.argument<String>("url")
+                        val targets = if (url.isNullOrBlank()) {
+                            emptyList()
+                        } else {
+                            try {
+                                linkTargets(url)
+                            } catch (e: Exception) {
+                                emptyList()
+                            }
+                        }
+                        result.success(targets)
+                    }
+                    "openLinkTarget" -> {
+                        val url = call.argument<String>("url")
+                        val packageName = call.argument<String>("packageName")
+                        val activityName = call.argument<String>("activityName")
+                        val opened = if (url.isNullOrBlank() || packageName.isNullOrBlank() || activityName.isNullOrBlank()) {
+                            false
+                        } else {
+                            try {
+                                openLinkTarget(url, packageName, activityName)
+                            } catch (e: Exception) {
+                                false
+                            }
+                        }
+                        result.success(opened)
+                    }
+                    else -> result.notImplemented()
                 }
             }
 

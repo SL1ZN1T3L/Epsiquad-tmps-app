@@ -9,6 +9,12 @@ class LoginResult {
   final AppUser user;
 }
 
+class TotpRequiredException implements Exception {
+  const TotpRequiredException(this.challenge);
+
+  final String challenge;
+}
+
 class AuthService {
   AuthService(this._api);
 
@@ -22,6 +28,17 @@ class AuthService {
         'platform': 'android',
         'app_version': appVersion,
       };
+
+  void _throwIfTotpRequired(Map<String, dynamic> data) {
+    if (data['totp_required'] != true && data['status'] != 'totp_required') {
+      return;
+    }
+    final challenge = data['challenge'] as String? ?? '';
+    if (challenge.isEmpty) {
+      throw ApiException('Сервер не вернул запрос двухфакторной защиты');
+    }
+    throw TotpRequiredException(challenge);
+  }
 
   Future<ServerConfig> config() async {
     final data = await _api.get('$kApiPrefix/config', auth: false);
@@ -41,6 +58,30 @@ class AuthService {
       body: {
         'login': login,
         'password': password,
+        'device': _devicePayload(deviceId, deviceName, appVersion),
+      },
+    );
+    _throwIfTotpRequired(data);
+    return LoginResult(
+      tokens: TokenPair.fromJson(data),
+      user:
+          AppUser.fromJson((data['user'] as Map<String, dynamic>?) ?? const {}),
+    );
+  }
+
+  Future<LoginResult> loginWithTotp({
+    required String challenge,
+    required String code,
+    required String deviceId,
+    required String deviceName,
+    required String appVersion,
+  }) async {
+    final data = await _api.post(
+      '$kApiPrefix/auth/totp',
+      auth: false,
+      body: {
+        'challenge': challenge,
+        'code': code,
         'device': _devicePayload(deviceId, deviceName, appVersion),
       },
     );
@@ -79,6 +120,7 @@ class AuthService {
         'device': _devicePayload(deviceId, deviceName, appVersion),
       },
     );
+    _throwIfTotpRequired(data);
     final status = data['status'] as String? ?? 'pending';
     if (status == 'pending') return null;
     if (status != 'approved') {

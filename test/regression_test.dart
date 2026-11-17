@@ -6,15 +6,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:tmps/models/session.dart';
 import 'package:tmps/models/storage.dart';
 import 'package:tmps/providers/app_provider.dart';
 import 'package:tmps/providers/storage_provider.dart';
 import 'package:tmps/providers/storages_provider.dart';
 import 'package:tmps/services/api_client.dart';
+import 'package:tmps/services/auth_service.dart';
 import 'package:tmps/services/node_service.dart';
 import 'package:tmps/services/secure_store.dart';
 import 'package:tmps/services/share_inbox.dart';
 import 'package:tmps/services/storage_service.dart';
+import 'package:tmps/services/system_service.dart';
 import 'package:tmps/services/update_service.dart';
 
 void main() {
@@ -23,6 +26,7 @@ void main() {
   const secureChannel =
       MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
   const reminderChannel = MethodChannel('com.epsiquad.tmps/reminders');
+  const systemChannel = MethodChannel('com.epsiquad.tmps/system');
   const downloaderChannel = MethodChannel('com.bbflight.background_downloader');
   const downloaderBackgroundChannel =
       MethodChannel('com.bbflight.background_downloader.background');
@@ -76,9 +80,193 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(reminderChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(systemChannel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(downloaderChannel, null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(downloaderBackgroundChannel, null);
+  });
+
+  group('Явный выбор приложения', () {
+    const url = 'https://t.me/example_bot?start=token';
+
+    test('список содержит иконки и открывает выбранный компонент', () async {
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(systemChannel, (call) async {
+        calls.add(call);
+        if (call.method == 'getLinkTargets') {
+          return [
+            {
+              'label': 'AyuGram',
+              'packageName': 'org.ayugram.messenger',
+              'activityName': 'org.telegram.ui.LaunchActivity',
+              'icon': Uint8List.fromList([1, 2, 3]),
+            },
+          ];
+        }
+        return true;
+      });
+
+      final targets = await SystemService.getLinkTargets(url);
+      expect(targets.single.label, 'AyuGram');
+      expect(targets.single.icon, [1, 2, 3]);
+      expect(await SystemService.openLinkTarget(url, targets.single), isTrue);
+      expect(calls.map((call) => call.method),
+          ['getLinkTargets', 'openLinkTarget']);
+      expect(calls.last.arguments, {
+        'url': url,
+        'packageName': 'org.ayugram.messenger',
+        'activityName': 'org.telegram.ui.LaunchActivity',
+      });
+    });
+
+    test('ошибка нативного канала разрешает запасной запуск', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(systemChannel, (call) async {
+        throw PlatformException(code: 'unavailable');
+      });
+
+      expect(await SystemService.getLinkTargets(url), isEmpty);
+      final target = LinkTarget(
+        label: 'AyuGram',
+        packageName: 'org.ayugram.messenger',
+        activityName: 'org.telegram.ui.LaunchActivity',
+        icon: Uint8List(1),
+      );
+      expect(await SystemService.openLinkTarget(url, target), isFalse);
+    });
+  });
+
+  group('Вход с кодами', () {
+    const success = {
+      'access_token': 'access',
+      'refresh_token': 'refresh',
+      'expires_in': 900,
+      'user': {'id': 1, 'login': 'user'},
+    };
+
+    test('парольный вход сообщает challenge для двухфакторной защиты', () async {
+      final api = ApiClient(
+        client: MockClient((request) async {
+          expect(request.url.path, '/api/v1/auth/password');
+          return http.Response(
+              jsonEncode({'ok': true, 'totp_required': true, 'challenge': 'c1'}),
+              200);
+        }),
+        accessToken: () => null,
+        refresh: () async => false,
+      );
+      final auth = AuthService(api);
+
+      await expectLater(
+        auth.loginWithPassword(
+          login: 'user',
+          password: 'password',
+          deviceId: 'device',
+          deviceName: 'Phone',
+          appVersion: '1.8.0',
+        ),
+        throwsA(isA<TotpRequiredException>()
+            .having((e) => e.challenge, 'challenge', 'c1')),
+      );
+      api.close();
+    });
+
+    test('код двухфакторной защиты завершает вход', () async {
+      late http.Request captured;
+      final api = ApiClient(
+        client: MockClient((request) async {
+          captured = request;
+          return http.Response(jsonEncode(success), 200);
+        }),
+        accessToken: () => null,
+        refresh: () async => false,
+      );
+      final auth = AuthService(api);
+
+      final result = await auth.loginWithTotp(
+        challenge: 'c1',
+        code: '123456',
+        deviceId: 'device',
+        deviceName: 'Phone',
+        appVersion: '1.8.0',
+      );
+
+      expect(captured.url.path, '/api/v1/auth/totp');
+      final body = jsonDecode(captured.body) as Map<String, dynamic>;
+      expect(body['challenge'], 'c1');
+      expect(body['code'], '123456');
+      expect(body['device'], {
+        'id': 'device',
+        'name': 'Phone',
+        'platform': 'android',
+        'app_version': '1.8.0',
+      });
+      expect(result.tokens.accessToken, 'access');
+      expect(result.user.login, 'user');
+      api.close();
+    });
+
+    test('Telegram start сохраняет код для отправки боту', () async {
+      final api = ApiClient(
+        client: MockClient((request) async {
+          return http.Response(jsonEncode({
+            'token': 'token',
+            'nonce': 'nonce',
+            'code': '123456',
+            'url': 'https://t.me/example_bot?start=login_token',
+            'expires_in': 300,
+          }), 200);
+        }),
+        accessToken: () => null,
+        refresh: () async => false,
+      );
+      final auth = AuthService(api);
+
+      final login = await auth.telegramStart(
+        deviceId: 'device',
+        deviceName: 'Phone',
+        appVersion: '1.8.0',
+      );
+
+      expect(login.code, '123456');
+      api.close();
+    });
+
+    test('Telegram claim переводит вход на двухфакторную защиту', () async {
+      final api = ApiClient(
+        client: MockClient((request) async {
+          return http.Response(jsonEncode({
+            'status': 'totp_required',
+            'challenge': 'tg-challenge',
+          }), 200);
+        }),
+        accessToken: () => null,
+        refresh: () async => false,
+      );
+      final auth = AuthService(api);
+      const login = TelegramLogin(
+        token: 'token',
+        nonce: 'nonce',
+        code: '123456',
+        url: 'https://t.me/example_bot',
+        expiresIn: 300,
+      );
+
+      await expectLater(
+        auth.telegramClaim(
+          login: login,
+          deviceId: 'device',
+          deviceName: 'Phone',
+          appVersion: '1.8.0',
+        ),
+        throwsA(isA<TotpRequiredException>()
+            .having((e) => e.challenge, 'challenge', 'tg-challenge')),
+      );
+      api.close();
+    });
+
   });
 
   group('Защищённые метаданные', () {
